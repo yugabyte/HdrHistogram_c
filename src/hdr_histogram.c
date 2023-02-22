@@ -65,20 +65,22 @@ static int64_t counts_get_normalised(const struct hdr_histogram* h, int32_t inde
 }
 
 static void counts_inc_normalised(
-    struct hdr_histogram* h, int32_t index, int64_t value)
+    struct hdr_histogram* h, int32_t index, int64_t value, int64_t count)
 {
     int32_t normalised_index = normalize_index(h, index);
-    h->counts[normalised_index] += value;
-    h->total_count += value;
+    h->counts[normalised_index] += count;
+    h->total_count += count;
+    h->total_sum += value * count;
 }
 
 static void counts_inc_normalised_atomic(
-    struct hdr_histogram* h, int32_t index, int64_t value)
+    struct hdr_histogram* h, int32_t index, int64_t value, int64_t count)
 {
     int32_t normalised_index = normalize_index(h, index);
 
-    hdr_atomic_add_fetch_64(&h->counts[normalised_index], value);
-    hdr_atomic_add_fetch_64(&h->total_count, value);
+    hdr_atomic_add_fetch_64(&h->counts[normalised_index], count);
+    hdr_atomic_add_fetch_64(&h->total_count, count);
+    hdr_atomic_add_fetch_64(&h->total_sum, value * count);
 }
 
 static void update_min_max(struct hdr_histogram* h, int64_t value)
@@ -402,7 +404,10 @@ void hdr_init_preallocated(struct hdr_histogram* h, struct hdr_histogram_bucket_
     h->conversion_ratio                = 1.0;
     h->bucket_count                    = cfg->bucket_count;
     h->counts_len                      = cfg->counts_len;
+    h->cleared_count                   = 0;
     h->total_count                     = 0;
+    h->cleared_sum                     = 0;
+    h->total_sum                       = 0;
 }
 
 int hdr_init(
@@ -458,10 +463,24 @@ int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct h
 /* reset a histogram to zero. */
 void hdr_reset(struct hdr_histogram *h)
 {
-     h->total_count=0;
-     h->min_value = INT64_MAX;
-     h->max_value = 0;
-     memset(h->counts, 0, (sizeof(int64_t) * h->counts_len));
+    h->cleared_count += h->total_count;
+    h->total_count = 0;
+    h->cleared_sum += h->total_sum;
+    h->total_sum = 0;
+    h->min_value = INT64_MAX;
+    h->max_value = 0;
+    memset(h->counts, 0, (sizeof(int64_t) * h->counts_len));
+}
+
+void hdr_reset_atomic(struct hdr_histogram *h)
+{
+    hdr_atomic_add_fetch_64(&h->cleared_count, hdr_atomic_exchange_64(&h->total_count, 0));
+    hdr_atomic_add_fetch_64(&h->cleared_sum, hdr_atomic_exchange_64(&h->total_sum, 0));
+    hdr_atomic_store_64(&h->min_value, INT64_MAX);
+    hdr_atomic_store_64(&h->max_value, 0);
+    for (int i = 0; i < h->counts_len; ++i) {
+         hdr_atomic_store_64(&h->counts[i], 0);
+    }
 }
 
 size_t hdr_get_memory_size(struct hdr_histogram *h)
@@ -504,7 +523,7 @@ bool hdr_record_values(struct hdr_histogram* h, int64_t value, int64_t count)
         return false;
     }
 
-    counts_inc_normalised(h, counts_index, count);
+    counts_inc_normalised(h, counts_index, value, count);
     update_min_max(h, value);
 
     return true;
@@ -526,7 +545,7 @@ bool hdr_record_values_atomic(struct hdr_histogram* h, int64_t value, int64_t co
         return false;
     }
 
-    counts_inc_normalised_atomic(h, counts_index, count);
+    counts_inc_normalised_atomic(h, counts_index, value, count);
     update_min_max_atomic(h, value);
 
     return true;
@@ -830,6 +849,7 @@ static bool move_next(struct hdr_iter* iter)
     iter->value = value;
     iter->highest_equivalent_value = leq + size_of_equivalent_value_range - 1;
     iter->median_equivalent_value = leq + (size_of_equivalent_value_range >> 1);
+    iter->cumulative_value += iter->count * iter->median_equivalent_value;
 
     return true;
 }
@@ -889,6 +909,7 @@ void hdr_iter_init(struct hdr_iter* iter, const struct hdr_histogram* h)
     iter->count = 0;
     iter->cumulative_count = 0;
     iter->value = 0;
+    iter->cumulative_value = 0;
     iter->highest_equivalent_value = 0;
     iter->value_iterated_from = 0;
     iter->value_iterated_to = 0;

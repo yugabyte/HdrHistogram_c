@@ -30,7 +30,10 @@ struct hdr_histogram
     int32_t normalizing_index_offset;
     double conversion_ratio;
     int32_t counts_len;
+    int64_t cleared_count;
     int64_t total_count;
+    int64_t cleared_sum;
+    int64_t total_sum;
     int64_t* counts;
 };
 
@@ -90,6 +93,21 @@ int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct h
  *
  */
 void hdr_reset(struct hdr_histogram* h);
+
+/**
+ * Reset a histogram to zero - empty out a histogram and re-initialise it
+ *
+ * If you want to re-use an existing histogram, but reset everything back to zero, this
+ * is the routine to use.
+ *
+ * Will clear values atomically, however the whole structure may appear inconsistent
+ * when read concurrently with this update.  Do NOT mix calls to this method with calls
+ * to non-atomic updates.
+ *
+ * @param h The histogram you want to reset to empty.
+ *
+ */
+void hdr_reset_atomic(struct hdr_histogram* h);
 
 /**
  * Get the memory size of the hdr_histogram.
@@ -386,6 +404,8 @@ struct hdr_iter
     int64_t count;
     /** sum of all of the counts up to and including the count at this index */
     int64_t cumulative_count;
+    /** sum of count * median value up to and including this index */
+    int64_t cumulative_value;
     /** The current value based on counts_index */
     int64_t value;
     int64_t highest_equivalent_value;
