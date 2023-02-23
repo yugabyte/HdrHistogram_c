@@ -68,6 +68,21 @@ int hdr_init(
     struct hdr_histogram** result);
 
 /**
+ * Allocate the memory and initialise the hdr_histogram using data from another hdr_histogram.
+ *
+ * The histogram should be released with hdr_close
+ *
+ * @param source Source histogram to copy from.
+ * @param result Output parameter to capture allocated histogram.
+ * @return 0 on success, EINVAL if lowest_discernible_value is < 1 or the
+ * significant_figure value is outside of the allowed range, ENOMEM if malloc
+ * failed.
+ */
+int hdr_copy(
+        const struct hdr_histogram* source,
+        struct hdr_histogram** result);
+
+/**
  * Free the memory and close the hdr_histogram.
  *
  * @param h The histogram you want to close.

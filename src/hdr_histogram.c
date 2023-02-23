@@ -447,6 +447,33 @@ int hdr_init(
     return 0;
 }
 
+int hdr_copy(
+        const struct hdr_histogram* source,
+        struct hdr_histogram** result)
+{
+    int error = hdr_init(
+            source->lowest_discernible_value, source->highest_trackable_value,
+            source->significant_figures, result);
+    if (error) {
+        return error;
+    }
+
+    (*result)->min_value                = source->min_value;
+    (*result)->max_value                = source->max_value;
+    (*result)->normalizing_index_offset = source->normalizing_index_offset;
+    (*result)->conversion_ratio         = source->conversion_ratio;
+    (*result)->cleared_count            = source->cleared_count;
+    (*result)->total_count              = source->total_count;
+    (*result)->cleared_sum              = source->cleared_sum;
+    (*result)->total_sum                = source->total_sum;
+
+    for (int i = 0; i < source->counts_len; ++i) {
+        (*result)->counts[i] = source->counts[i];
+    }
+
+    return 0;
+}
+
 void hdr_close(struct hdr_histogram* h)
 {
     if (h) {
