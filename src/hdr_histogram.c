@@ -739,11 +739,7 @@ int64_t hdr_value_at_percentile(const struct hdr_histogram* h, double percentile
     int64_t count_at_percentile =
         (int64_t) (((requested_percentile / 100) * h->total_count) + 0.5);
     int64_t value_from_idx = get_value_from_idx_up_to_count(h, count_at_percentile);
-    if (percentile == 0.0)
-    {
-        return lowest_equivalent_value(h, value_from_idx);
-    }
-    return highest_equivalent_value(h, value_from_idx);
+    return lowest_equivalent_value(h, value_from_idx);
 }
 
 int hdr_value_at_percentiles(const struct hdr_histogram *h, const double *percentiles, int64_t *values, size_t length)
