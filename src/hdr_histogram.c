@@ -196,6 +196,9 @@ static int64_t value_from_index(int32_t bucket_index, int32_t sub_bucket_index, 
 
 int32_t counts_index_for(const struct hdr_histogram* h, int64_t value)
 {
+    if (value > h->highest_trackable_value) {
+        value = h->highest_trackable_value;
+    }
     int32_t bucket_index     = get_bucket_index(h, value);
     int32_t sub_bucket_index = get_sub_bucket_index(value, bucket_index, h->unit_magnitude);
 
