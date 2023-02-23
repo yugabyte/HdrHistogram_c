@@ -663,6 +663,26 @@ int64_t hdr_add(struct hdr_histogram* h, const struct hdr_histogram* from)
     return dropped;
 }
 
+int64_t hdr_add_atomic(struct hdr_histogram* h, const struct hdr_histogram* from)
+{
+    struct hdr_iter iter;
+    int64_t dropped = 0;
+    hdr_iter_recorded_init(&iter, from);
+
+    while (hdr_iter_next(&iter))
+    {
+        int64_t value = iter.value;
+        int64_t count = iter.count;
+
+        if (!hdr_record_values_atomic(h, value, count))
+        {
+            dropped += count;
+        }
+    }
+
+    return dropped;
+}
+
 int64_t hdr_add_while_correcting_for_coordinated_omission(
         struct hdr_histogram* h, struct hdr_histogram* from, int64_t expected_interval)
 {

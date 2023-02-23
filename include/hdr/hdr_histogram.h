@@ -274,6 +274,22 @@ int64_t hdr_add(struct hdr_histogram* h, const struct hdr_histogram* from);
  * if they around outside of h.lowest_discernible_value and
  * h.highest_trackable_value.
  *
+ * Will add values atomically, however the whole structure may appear inconsistent
+ * when read concurrently with this update.  Do NOT mix calls to this method with calls
+ * to non-atomic updates.
+ *
+ * @param h "This" pointer
+ * @param from Histogram to copy values from.
+ * @return The number of values dropped when copying.
+ */
+int64_t hdr_add_atomic(struct hdr_histogram* h, const struct hdr_histogram* from);
+
+/**
+ * Adds all of the values from 'from' to 'this' histogram.  Will return the
+ * number of values that are dropped when copying.  Values will be dropped
+ * if they around outside of h.lowest_discernible_value and
+ * h.highest_trackable_value.
+ *
  * @param h "This" pointer
  * @param from Histogram to copy values from.
  * @return The number of values dropped when copying.
