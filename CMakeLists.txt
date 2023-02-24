@@ -47,12 +47,12 @@ if(UNIX)
     add_definitions(-D_GNU_SOURCE)
 endif()
 
-find_package(ZLIB)
 find_package(Threads REQUIRED)
 
 if (HDR_LOG_REQUIRED STREQUAL "DISABLED")
     set(HDR_LOG_ENABLED "FALSE")
 else()
+    find_package(ZLIB)
     set(HDR_LOG_ENABLED ${ZLIB_FOUND})
     if (${HDR_LOG_REQUIRED} AND NOT HDR_LOG_ENABLED)
         message(SEND_ERROR "HDR_LOG_REQUIRED=ON and unable to find zlib library")
