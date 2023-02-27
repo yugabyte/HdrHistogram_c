@@ -61,7 +61,7 @@ int main(int argc, char** argv)
 
         if (0 == rc)
         {
-            hdr_percentiles_print(h, stdout, 5, 1.0, CLASSIC);
+            hdr_percentiles_print(h, stdout, 5, 1.0);
         }
         else if (EOF == rc)
         {
