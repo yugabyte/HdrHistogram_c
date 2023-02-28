@@ -73,7 +73,7 @@ int hdr_init(
     int64_t lowest_discernible_value,
     int64_t highest_trackable_value,
     int significant_figures,
-    struct hdr_histogram** result);
+    struct hdr_histogram* histogram);
 
 /**
  * Free the memory and close the hdr_histogram.
@@ -88,7 +88,7 @@ void hdr_close(struct hdr_histogram* h);
  *
  * @deprecated use hdr_init.
  */
-int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram** result);
+int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram* result);
 
 
 /**

@@ -416,11 +416,11 @@ int hdr_init(
         int64_t lowest_discernible_value,
         int64_t highest_trackable_value,
         int significant_figures,
-        struct hdr_histogram** result)
+        struct hdr_histogram* histogram)
 {
     int32_t * counts;
     struct hdr_histogram_bucket_config cfg;
-    struct hdr_histogram* histogram;
+    // struct hdr_histogram* histogram;
 
     int r = hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, significant_figures, &cfg);
     if (r)
@@ -434,7 +434,7 @@ int hdr_init(
         return ENOMEM;
     }
 
-    histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
+    // histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
     if (!histogram)
     {
         hdr_free(counts);
@@ -444,7 +444,8 @@ int hdr_init(
     histogram->counts = counts;
 
     hdr_init_preallocated(histogram, &cfg);
-    *result = histogram;
+    // result = histogram;
+    // printf("variable result is at address: %p\n", (void*) result);
 
     return 0;
 }
@@ -458,7 +459,7 @@ void hdr_close(struct hdr_histogram* h)
     }
 }
 
-int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram** result)
+int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram* result)
 {
     return hdr_init(1, highest_trackable_value, significant_figures, result);
 }
