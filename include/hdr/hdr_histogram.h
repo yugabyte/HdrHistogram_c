@@ -10,9 +10,9 @@
 #ifndef HDR_HISTOGRAM_H
 #define HDR_HISTOGRAM_H 1
 
-// int32 counts array, 1 sig fig, max value 9000000, hard-coded subbucket size at 16 rather than 32
-#define YB_HISTOGRAM_SIZE 808 // for reference
-#define YB_NUM_BINS 176 // determines counts size
+// // int32 counts array, 1 sig fig, max value 9000000, hard-coded subbucket size at 16 rather than 32
+// #define YB_HISTOGRAM_SIZE 816 // for reference
+// #define YB_NUM_BINS 176 // determines counts size
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -37,10 +37,9 @@ struct hdr_histogram
     int32_t counts_len;
     int64_t total_count;
 
-    // we are running fixed-size histograms
-    // int32_t *counts;
+    int32_t *counts;
 
-    int32_t counts[YB_NUM_BINS];
+    // int32_t counts[YB_NUM_BINS];
 
     // support for dynamic sizing
     bool auto_resize;
@@ -518,11 +517,11 @@ int64_t hdr_median_equivalent_value(const struct hdr_histogram* h, int64_t value
  */
 void hdr_reset_internal_counters(struct hdr_histogram* h);
 
-int yb_hdr_init(
-        int64_t lowest_discernible_value,
-        int64_t highest_trackable_value,
-        int significant_figures,
-        struct hdr_histogram* histogram);
+// int yb_hdr_init(
+//         int64_t lowest_discernible_value,
+//         int64_t highest_trackable_value,
+//         int significant_figures,
+//         struct hdr_histogram* histogram);
 
 #ifdef __cplusplus
 }
