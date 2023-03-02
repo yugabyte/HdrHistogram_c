@@ -26,12 +26,10 @@ int main()
 {
     //srand(time(NULL));
     // int i, value;
-    struct hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
+    struct hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram) + 176*4);
 
     // lower bound: 1ms, upper bound: 900,000ms
     hdr_init(1, 16777215, 1, histogram);
-
-    // hdr_set_auto_resize(histogram, true);
 
     // for (i = 0; i < 20; i++)
     // {
@@ -63,7 +61,7 @@ int main()
 
     int mem = hdr_get_memory_size(histogram);
     // int mem = sizeof(histogram->counts);
-    printf("Footprint: %d \n", mem);
+    printf("Footprint: histogram struct size: %d, total size: %d \n", sizeof(struct hdr_histogram), mem);
 
     // printf("\nPercentiles Printing\n\n");
     // hdr_percentiles_print(histogram,stdout,5,1.0);

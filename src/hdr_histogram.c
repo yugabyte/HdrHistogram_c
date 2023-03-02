@@ -441,7 +441,7 @@ int hdr_init(
         return ENOMEM;
     }
 
-    histogram->counts = counts;
+    // histogram->counts = counts;
 
     hdr_init_preallocated(histogram, &cfg);
     // result = histogram;
