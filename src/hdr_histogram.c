@@ -343,12 +343,14 @@ static int32_t buckets_needed_to_cover_value(int64_t value, int32_t sub_bucket_c
 int hdr_calculate_bucket_config(
         int64_t lowest_discernible_value,
         int64_t highest_trackable_value,
-        int significant_figures,
+        int yb_bucket_factor,
         struct hdr_histogram_bucket_config* cfg)
 {
     int32_t sub_bucket_count_magnitude;
     int64_t largest_value_with_single_unit_resolution;
 
+    // yb change: hardcoded sig figs to 1 for memory performance, controlling bucket sizes with yb_bucket_factor
+    int significant_figures = 1;
     if (lowest_discernible_value < 1 ||
             significant_figures < 1 || 5 < significant_figures ||
             lowest_discernible_value * 2 > highest_trackable_value)
@@ -362,12 +364,26 @@ int hdr_calculate_bucket_config(
 
     largest_value_with_single_unit_resolution = 2 * power(10, significant_figures);
     sub_bucket_count_magnitude = (int32_t) ceil(log((double)largest_value_with_single_unit_resolution) / log(2));
-    sub_bucket_count_magnitude = 4; // HARD CODED SUBBUCKET SIZE TO 16!!!
+
+    // yb change: override subbucket count magnitude to set subbuckets per bucket equal to yb_bucket_factor variable
+    switch(yb_bucket_factor)
+    {
+        case 8:
+            sub_bucket_count_magnitude = 3;
+            break;
+        case 16:
+            sub_bucket_count_magnitude = 4;
+            break;
+        case 32:
+            sub_bucket_count_magnitude = 5;
+            break;
+        default:
+            printf("Invalid yb_bucket_factor of %d entered, enforcing default of 16 \n", yb_bucket_factor);
+            sub_bucket_count_magnitude = 4;
+    }
+
     cfg->sub_bucket_half_count_magnitude = ((sub_bucket_count_magnitude > 1) ? sub_bucket_count_magnitude : 1) - 1;
     double unit_magnitude = log((double)lowest_discernible_value) / log(2);
-    // printf("subbucket count magnitude: %d \n", sub_bucket_count_magnitude);
-    // printf("subbucket half count magnitude: %d \n", cfg->sub_bucket_half_count_magnitude);
-    // printf("unit magnitude: %d \n", unit_magnitude);
     if (INT32_MAX < unit_magnitude)
     {
         return EINVAL;
@@ -377,9 +393,6 @@ int hdr_calculate_bucket_config(
     cfg->sub_bucket_count      = (int32_t) pow(2, (cfg->sub_bucket_half_count_magnitude + 1));
     cfg->sub_bucket_half_count = cfg->sub_bucket_count / 2;
     cfg->sub_bucket_mask       = ((int64_t) cfg->sub_bucket_count - 1) << cfg->unit_magnitude;
-    printf("cfg unit magnitude: %d \n", cfg->unit_magnitude);
-    printf("subbucket count: %d \n", cfg->sub_bucket_count);
-    // printf("subbucket mask: %d \n", cfg->sub_bucket_mask);
 
     if (cfg->unit_magnitude + cfg->sub_bucket_half_count_magnitude > 61)
     {
@@ -388,7 +401,6 @@ int hdr_calculate_bucket_config(
 
     cfg->bucket_count = buckets_needed_to_cover_value(highest_trackable_value, cfg->sub_bucket_count, (int32_t)cfg->unit_magnitude);
     cfg->counts_len = (cfg->bucket_count + 1) * (cfg->sub_bucket_count / 2);
-    printf("bucket count: %d \n", cfg->bucket_count);
 
     return 0;
 }
@@ -415,53 +427,39 @@ void hdr_init_preallocated(struct hdr_histogram* h, struct hdr_histogram_bucket_
 int hdr_init(
         int64_t lowest_discernible_value,
         int64_t highest_trackable_value,
-        int significant_figures,
+        int yb_bucket_factor,
         struct hdr_histogram* histogram)
 {
-    int32_t * counts;
     struct hdr_histogram_bucket_config cfg;
-    // struct hdr_histogram* histogram;
 
-    int r = hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, significant_figures, &cfg);
+    int r = hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, yb_bucket_factor, &cfg);
     if (r)
     {
         return r;
     }
 
-    counts = (int32_t*) calloc((size_t) cfg.counts_len, sizeof(int32_t));
-    if (!counts)
-    {
-        return ENOMEM;
-    }
-
-    // histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
     if (!histogram)
     {
-        hdr_free(counts);
         return ENOMEM;
     }
 
-    // histogram->counts = counts;
-
     hdr_init_preallocated(histogram, &cfg);
-    // result = histogram;
-    // printf("variable result is at address: %p\n", (void*) result);
 
     return 0;
 }
 
+// given we are initializing all hdr_histograms as part of pgssEntry + YB_HISTOGRAM_SIZE, with its own associated cleanup, we should not need to call this in pg_stat_statements.c
 void hdr_close(struct hdr_histogram* h)
 {
     if (h)
     {
-        hdr_free(h->counts);
         hdr_free(h);
     }
 }
 
-int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram* result)
+int hdr_alloc(int64_t highest_trackable_value, int yb_bucket_factor, struct hdr_histogram* result)
 {
-    return hdr_init(1, highest_trackable_value, significant_figures, result);
+    return hdr_init(1, highest_trackable_value, yb_bucket_factor, result);
 }
 
 /* reset a histogram to zero. */
@@ -878,7 +876,6 @@ static bool basic_iter_next(struct hdr_iter *iter)
 
 static void update_iterated_values(struct hdr_iter* iter, int64_t new_value_iterated_to)
 {
-    // printf("iter from: %d, iterated to: %d, new_iterated to: %d \n", iter->value_iterated_from, iter->value_iterated_to, new_value_iterated_to);
     iter->value_iterated_from = iter->value_iterated_to;
     iter->value_iterated_to = new_value_iterated_to;
 }
@@ -1112,7 +1109,6 @@ static bool log_iter_next(struct hdr_iter *iter)
     {
         do
         {
-            printf("index: %d, value: %lld, count: %d, counts_added: %d \n", iter->counts_index, iter->value, iter->count, logarithmic->count_added_in_this_iteration_step);
             if (iter->value >= logarithmic->next_value_reporting_level_lowest_equivalent)
             {
                 update_iterated_values(iter, logarithmic->next_value_reporting_level);
@@ -1221,20 +1217,3 @@ int hdr_percentiles_print(
     cleanup:
     return rc;
 }
-
-// int yb_hdr_init(
-//         int64_t lowest_discernible_value,
-//         int64_t highest_trackable_value,
-//         int significant_figures,
-//         struct hdr_histogram* histogram)
-// {
-//     struct hdr_histogram_bucket_config cfg;
-//     int r = hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, significant_figures, &cfg);
-//     if (r)
-//     {
-//         return r;
-//     }
-//     hdr_init_preallocated(histogram, &cfg);
-
-//     return 0;
-// }

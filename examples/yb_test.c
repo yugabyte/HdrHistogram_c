@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <math.h>
 #include <time.h>
 #include <errno.h>
 #include <string.h>
@@ -28,8 +29,9 @@ int main()
     // int i, value;
     struct hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram) + 176*4);
 
-    // lower bound: 1ms, upper bound: 900,000ms
-    hdr_init(1, 16777215, 1, histogram);
+    hdr_init(1, 16777215, 32, histogram);
+    printf("subbucket count: %d \n", histogram->sub_bucket_count);
+    printf("bucket count: %d \n", histogram->bucket_count);
 
     // for (i = 0; i < 20; i++)
     // {
@@ -43,25 +45,33 @@ int main()
     //     // printf("Added value: %d \n", value);
     //     hdr_record_value(histogram, value);
     // }
-    hdr_record_value(histogram, 1);
+    // hdr_record_value(histogram, 1);
+    // hdr_record_value(histogram, 2);
+    // hdr_record_value(histogram, 3);
+    // hdr_record_value(histogram, 4);
+    // hdr_record_value(histogram, 4);
+    // hdr_record_value(histogram, 31);
+    // hdr_record_value(histogram, 32);
+    // hdr_record_value(histogram, 33);
+    // hdr_record_value(histogram, 8388607);
+    // hdr_record_value(histogram, 8388608);
+    // hdr_record_value(histogram, 9000000);
+    // hdr_record_value(histogram, 16777215);
+    // hdr_record_values(histogram, 1, 13);
+    hdr_record_values(histogram, 1, 4);
+    // hdr_record_values(histogram, 0, 4);
     hdr_record_value(histogram, 2);
-    hdr_record_value(histogram, 3);
-    hdr_record_value(histogram, 4);
-    hdr_record_value(histogram, 4);
-    hdr_record_value(histogram, 31);
-    hdr_record_value(histogram, 32);
-    hdr_record_value(histogram, 33);
-    hdr_record_value(histogram, 8388607);
-    hdr_record_value(histogram, 8388608);
-    hdr_record_value(histogram, 9000000);
-    hdr_record_value(histogram, 16777215);
-    hdr_record_values(histogram, 1, 13);
+    hdr_record_value(histogram, 8);
+    // hdr_record_values(histogram, 11, 3);
+    // hdr_record_values(histogram, 15, 1);
+    // hdr_record_values(histogram, 20, 4);
+    // hdr_record_value(histogram, 32);
 
     printf("total number of subbuckets: %d \n", histogram->counts_len);
 
     int mem = hdr_get_memory_size(histogram);
     // int mem = sizeof(histogram->counts);
-    printf("Footprint: histogram struct size: %d, total size: %d \n", sizeof(struct hdr_histogram), mem);
+    printf("Footprint: histogram struct size: %lu, total size: %d \n", sizeof(struct hdr_histogram), mem);
 
     // printf("\nPercentiles Printing\n\n");
     // hdr_percentiles_print(histogram,stdout,5,1.0);
@@ -113,8 +123,14 @@ int main()
 
     int64_t p90 = hdr_value_at_percentile(histogram, 90);
     int64_t p50 = hdr_value_at_percentile(histogram, 50);
+    int64_t p99 = hdr_value_at_percentile(histogram, 99);
 
-    printf("p90: %lld, p50: %lld \n", p90, p50);
+    printf("p99: %lld, p90: %lld, p50: %lld \n", p99, p90, p50);
+
+    printf("max value: %lld, highest_trackable_value: %lld \n", histogram->max_value, histogram->highest_trackable_value);
+    int derived_max_mag = histogram->sub_bucket_half_count_magnitude + 1 + histogram->bucket_count - 1;
+    int derived_max = pow(2, derived_max_mag);
+    printf("derived max: %d \n", derived_max);
 
     return 0;
 }
