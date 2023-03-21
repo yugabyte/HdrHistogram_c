@@ -59,7 +59,7 @@ extern "C" {
  * Must be a positive integer that is >= 1. May be internally rounded down to nearest power of 2.
  * @param highest_trackable_value The largest possible value to be put into the
  * histogram.
- * @param yb_bucket_factor Overrides significant figure limitations to set the number of subbuckets per bucket. Can be 8, 16, 32 in current configuration. 
+ * @param yb_bucket_factor Overrides significant figure limitations to set the number of subbuckets per bucket. Can be 8, 16, 32 in current configuration.
  * @param result Output parameter to capture allocated histogram.
  * @return 0 on success, EINVAL if lowest_discernible_value is < 1 or the
  * significant_figure value is outside of the allowed range, ENOMEM if malloc

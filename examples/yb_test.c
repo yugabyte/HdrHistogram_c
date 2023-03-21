@@ -29,7 +29,7 @@ int main()
     // int i, value;
     struct hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram) + 176*4);
 
-    hdr_init(1, 16777215, 32, histogram);
+    hdr_init(1, 16777215, 16, histogram);
     printf("subbucket count: %d \n", histogram->sub_bucket_count);
     printf("bucket count: %d \n", histogram->bucket_count);
 
