@@ -796,10 +796,6 @@ int32_t hdr_count_at_index(const struct hdr_histogram* h, int32_t index)
     return counts_get_normalised(h, index);
 }
 
-void hdr_set_auto_resize(struct hdr_histogram* h, bool value)
-{
-    h->auto_resize = value;
-}
 
 
 /* #### ######## ######## ########     ###    ########  #######  ########   ######  */
