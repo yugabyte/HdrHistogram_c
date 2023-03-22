@@ -16,7 +16,7 @@
 
 typedef int32_t count_type;
 
-struct hdr_histogram
+typedef struct hdr_histogram
 {
     int64_t lowest_discernible_value;
     int64_t highest_trackable_value;
@@ -36,7 +36,7 @@ struct hdr_histogram
 
     count_type counts[]; // flexible array member
 
-};
+} hdr_histogram;
 
 #ifdef __cplusplus
 extern "C" {
