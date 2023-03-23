@@ -1044,7 +1044,7 @@ void hdr_iter_percentile_init(struct hdr_iter* iter, const struct hdr_histogram*
     iter->_next_fp = percentile_iter_next;
 }
 
-static void format_line_string(char* str, size_t len, int significant_figures, format_type format)
+static void format_line_string(char* str, size_t len, int significant_figures, hdr_format_type format)
 {
 #if defined(_MSC_VER)
 #define snprintf _snprintf
@@ -1223,7 +1223,7 @@ void hdr_iter_log_init(
 
 /* Printing. */
 
-static const char* format_head_string(format_type format)
+static const char* format_head_string(hdr_format_type format)
 {
     switch (format)
     {
@@ -1242,7 +1242,7 @@ static const char CLASSIC_FOOTER[] =
 
 int hdr_percentiles_print(
         struct hdr_histogram* h, FILE* stream, int32_t ticks_per_half_distance,
-        double value_scale, format_type format)
+        double value_scale, hdr_format_type format)
 {
     char line_format[25];
     const char* head_format;

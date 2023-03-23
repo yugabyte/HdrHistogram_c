@@ -493,7 +493,7 @@ typedef enum
 {
     CLASSIC,
     CSV
-} format_type;
+} hdr_format_type;
 
 /**
  * Print out a percentile based histogram to the supplied stream.  Note that
@@ -503,13 +503,13 @@ typedef enum
  * @param stream The FILE to write the output to
  * @param ticks_per_half_distance The number of iteration steps per half-distance to 100%
  * @param value_scale Scale the output values by this amount
- * @param format_type Format to use, e.g. CSV.
+ * @param hdr_format_type Format to use, e.g. CSV.
  * @return 0 on success, error code on failure.  EIO if an error occurs writing
  * the output.
  */
 int hdr_percentiles_print(
     struct hdr_histogram* h, FILE* stream, int32_t ticks_per_half_distance,
-    double value_scale, format_type format);
+    double value_scale, hdr_format_type format);
 
 /**
 * Internal allocation methods, used by hdr_dbl_histogram.
