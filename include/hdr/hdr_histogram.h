@@ -14,7 +14,11 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#ifdef USE_WIDE_COUNT_TYPE
+typedef int64_t count_type;
+#else
 typedef int32_t count_type;
+#endif
 
 typedef struct hdr_histogram
 {
