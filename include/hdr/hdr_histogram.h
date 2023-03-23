@@ -34,9 +34,18 @@ typedef struct hdr_histogram
     int32_t counts_len;
     int64_t total_count;
 
-    count_type counts[]; // flexible array member
+    count_type counts[]; /* flexible array member */
 
 } hdr_histogram;
+/*
+ * yb change: changed counts from pointer to array count_type* into flexible array member counts[].
+ * This change lets users on the pg_stat_statements side allocate counts arrays contiguous with 
+ * hdr_histogram structs in shared memory - important for serializing histograms to disk for 
+ * restarts. Additional fields describing the histogram struct size will be allocated in the 
+ * enclosing pgssEntry struct rather than within the hdr_histogram itself. Those additional fields
+ * are yb_hdr_max_latency_ms, yb_hdr_latency_res_ms, yb_hdr_bucket_factor, and 
+ * yb_histogram_count_bytes. Therefore no new fields need to be added above counts here. 
+ */
 
 #ifdef __cplusplus
 extern "C" {
@@ -480,6 +489,11 @@ void hdr_iter_log_init(
  */
 bool hdr_iter_next(struct hdr_iter* iter);
 
+typedef enum
+{
+    CLASSIC,
+    CSV
+} format_type;
 
 /**
  * Print out a percentile based histogram to the supplied stream.  Note that
@@ -489,12 +503,13 @@ bool hdr_iter_next(struct hdr_iter* iter);
  * @param stream The FILE to write the output to
  * @param ticks_per_half_distance The number of iteration steps per half-distance to 100%
  * @param value_scale Scale the output values by this amount
+ * @param format_type Format to use, e.g. CSV.
  * @return 0 on success, error code on failure.  EIO if an error occurs writing
  * the output.
  */
 int hdr_percentiles_print(
     struct hdr_histogram* h, FILE* stream, int32_t ticks_per_half_distance,
-    double value_scale);
+    double value_scale, format_type format);
 
 /**
 * Internal allocation methods, used by hdr_dbl_histogram.

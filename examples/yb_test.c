@@ -27,7 +27,7 @@ int main()
 {
     struct hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram) + 176*4);
 
-    hdr_init_pgss(1, 16777215, 2, histogram);
+    hdr_init_pgss(1, 16777215, 8, histogram);
     // hdr_init(1, 16777215, 1, histogram); // original hdr_init still takes in significant figures
 
     printf("subbucket count: %d \n", histogram->sub_bucket_count);
@@ -77,11 +77,20 @@ int main()
 
     printf("p99: %lld, p90: %lld, p50: %lld \n", p99, p90, p50);
 
+
+    // max value adjustment calculations
     printf("max value: %lld, highest_trackable_value: %lld \n", histogram->max_value, histogram->highest_trackable_value);
     int derived_max_mag = histogram->sub_bucket_half_count_magnitude + 1 + histogram->bucket_count - 1;
     int derived_max = pow(2, derived_max_mag);
     printf("derived max: %d \n", derived_max);
 
+    int prelim_max_value = 3000 / 0.1;
+    struct hdr_histogram* dummy = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
+    hdr_init_pgss(1, prelim_max_value, 16, dummy);
+    int dummy_derived = dummy->sub_bucket_half_count_magnitude + dummy->bucket_count;
+    int yb_hdr_max_value = pow(2, dummy_derived) - 1;
+    float yb_hdr_max_latency_ms = yb_hdr_max_value * 0.1;
+    printf("prelim_max_value: %d, yb_hdr_max_value: %d, yb_hdr_max_latency_ms: %f \n", prelim_max_value, yb_hdr_max_value, yb_hdr_max_latency_ms);
     return 0;
 }
 

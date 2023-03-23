@@ -1044,7 +1044,7 @@ void hdr_iter_percentile_init(struct hdr_iter* iter, const struct hdr_histogram*
     iter->_next_fp = percentile_iter_next;
 }
 
-static void format_line_string(char* str, size_t len, int significant_figures)
+static void format_line_string(char* str, size_t len, int significant_figures, format_type format)
 {
 #if defined(_MSC_VER)
 #define snprintf _snprintf
@@ -1052,7 +1052,18 @@ static void format_line_string(char* str, size_t len, int significant_figures)
 #pragma warning(disable: 4996)
 #endif
     const char* format_str = "%s%d%s";
-    snprintf(str, len, format_str, "%12.", significant_figures, "f %12f %12d %12.2f\n");
+
+    switch (format)
+    {
+        case CSV:
+            snprintf(str, len, format_str, "%.", significant_figures, "f,%f,%d,%.2f\n");
+            break;
+        case CLASSIC:
+            snprintf(str, len, format_str, "%12.", significant_figures, "f %12f %12d %12.2f\n");
+            break;
+        default:
+            snprintf(str, len, format_str, "%12.", significant_figures, "f %12f %12d %12.2f\n");
+    }
 #if defined(_MSC_VER)
 #undef snprintf
 #pragma warning(pop)
@@ -1186,6 +1197,7 @@ static bool log_iter_next(struct hdr_iter *iter)
             {
                 return true;
             }
+
             logarithmic->count_added_in_this_iteration_step += iter->count;
         }
         while (true);
@@ -1211,9 +1223,16 @@ void hdr_iter_log_init(
 
 /* Printing. */
 
-static const char* format_head_string()
+static const char* format_head_string(format_type format)
 {
-    return "%12s %12s %12s %12s\n\n";
+    switch (format)
+    {
+        case CSV:
+            return "%s,%s,%s,%s\n";
+        case CLASSIC:
+        default:
+            return "%12s %12s %12s %12s\n\n";
+    }
 }
 
 static const char CLASSIC_FOOTER[] =
@@ -1223,7 +1242,7 @@ static const char CLASSIC_FOOTER[] =
 
 int hdr_percentiles_print(
         struct hdr_histogram* h, FILE* stream, int32_t ticks_per_half_distance,
-        double value_scale)
+        double value_scale, format_type format)
 {
     char line_format[25];
     const char* head_format;
@@ -1231,10 +1250,8 @@ int hdr_percentiles_print(
     struct hdr_iter iter;
     struct hdr_iter_percentiles * percentiles;
 
-    int line_count=0;
-
-    format_line_string(line_format, 25, h->significant_figures);
-    head_format = format_head_string();
+    format_line_string(line_format, 25, h->significant_figures, format);
+    head_format = format_head_string(format);
 
     hdr_iter_percentile_init(&iter, h, ticks_per_half_distance);
 
@@ -1260,22 +1277,22 @@ int hdr_percentiles_print(
             rc = EIO;
             goto cleanup;
         }
-        line_count++;
     }
 
-    printf("Line count: %d \n", line_count);
-    double mean   = hdr_mean(h)   / value_scale;
-    double stddev = hdr_stddev(h) / value_scale;
-    double max    = hdr_max(h)    / value_scale;
-
-    if (fprintf(
-            stream, CLASSIC_FOOTER,  mean, stddev, max,
-            h->total_count, h->bucket_count, h->sub_bucket_count) < 0)
+    if (CLASSIC == format)
     {
-        rc = EIO;
-        goto cleanup;
-    }
+        double mean   = hdr_mean(h)   / value_scale;
+        double stddev = hdr_stddev(h) / value_scale;
+        double max    = hdr_max(h)    / value_scale;
 
+        if (fprintf(
+                stream, CLASSIC_FOOTER,  mean, stddev, max,
+                h->total_count, h->bucket_count, h->sub_bucket_count) < 0)
+        {
+            rc = EIO;
+            goto cleanup;
+        }
+    }
 
     cleanup:
     return rc;
