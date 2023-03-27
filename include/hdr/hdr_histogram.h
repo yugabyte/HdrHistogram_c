@@ -14,12 +14,26 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#ifdef USE_WIDE_COUNT_TYPE
-typedef int64_t count_type;
+#define USE_SHORT_COUNT_TYPE 1
+#define FLEXIBLE_COUNTS_ARRAY 1
+
+#ifdef USE_SHORT_COUNT_TYPE
+typedef int32_t count_t;
+#define COUNT_PRINT_FORMAT PRId32
 #else
-typedef int32_t count_type;
+typedef int64_t count_t;
+#define COUNT_PRINT_FORMAT PRId64
 #endif
 
+/*
+ * YB change: count_t* -> flexible array member counts[].
+ * This change lets users on the pg_stat_statements side allocate counts arrays contiguous with
+ * hdr_histogram structs in shared memory - important for serializing histograms to disk for
+ * restarts. Additional fields describing the histogram struct size will be allocated in the
+ * enclosing pgssEntry struct rather than within the hdr_histogram itself. Those additional fields
+ * are yb_hdr_max_latency_ms, yb_hdr_latency_res_ms, yb_hdr_bucket_factor, and
+ * yb_histogram_count_bytes. Therefore no new fields need to be added above counts here.
+ */
 typedef struct hdr_histogram
 {
     int64_t lowest_discernible_value;
@@ -38,18 +52,12 @@ typedef struct hdr_histogram
     int32_t counts_len;
     int64_t total_count;
 
-    count_type counts[]; /* flexible array member */
-
+    #ifdef FLEXIBLE_COUNTS_ARRAY
+    count_t counts[]; /* flexible array member, must be at end */
+    #else
+    count_t* counts;
+    #endif
 } hdr_histogram;
-/*
- * yb change: changed counts from pointer to array count_type* into flexible array member counts[].
- * This change lets users on the pg_stat_statements side allocate counts arrays contiguous with 
- * hdr_histogram structs in shared memory - important for serializing histograms to disk for 
- * restarts. Additional fields describing the histogram struct size will be allocated in the 
- * enclosing pgssEntry struct rather than within the hdr_histogram itself. Those additional fields
- * are yb_hdr_max_latency_ms, yb_hdr_latency_res_ms, yb_hdr_bucket_factor, and 
- * yb_histogram_count_bytes. Therefore no new fields need to be added above counts here. 
- */
 
 #ifdef __cplusplus
 extern "C" {
@@ -57,7 +65,6 @@ extern "C" {
 
 /**
  * Allocate the memory and initialise the hdr_histogram.
- *
  *
  * @param lowest_discernible_value The smallest possible value that is distinguishable from 0.
  * Must be a positive integer that is >= 1. May be internally rounded down to nearest power of 2.
@@ -76,28 +83,36 @@ int hdr_init(
     int64_t lowest_discernible_value,
     int64_t highest_trackable_value,
     int significant_figures,
-    struct hdr_histogram* histogram);
+    struct hdr_histogram** result);
 
 /**
- * Allocate the memory and initialise the hdr_histogram, for pg_stat_statements.
- *
+ * Initialise the hdr_histogram expecting preallocated memory, for pg_stat_statements.
  *
  * @param lowest_discernible_value The smallest possible value that is distinguishable from 0.
  * Must be a positive integer that is >= 1. May be internally rounded down to nearest power of 2.
  * @param highest_trackable_value The largest possible value to be put into the
  * histogram.
- * @param yb_bucket_factor Overrides significant figure limitations to set the number of subbuckets per bucket. Can be 8, 16, 32 in current configuration.
+ * @param yb_bucket_factor Overrides significant figure limitations to set the number of subbuckets
+ * per bucket. Can be 8, 16, 32 in current configuration.
  * @param result Output parameter to capture allocated histogram.
  * @return 0 on success, EINVAL if lowest_discernible_value is < 1 or the
- * significant_figure value is outside of the allowed range, ENOMEM if malloc
- * failed.
+ * yb_bucket_factor value is outside of the allowed range, ENOMEM if histogram allocation failed.
  */
-int hdr_init_pgss(
+#ifdef FLEXIBLE_COUNTS_ARRAY
+int yb_hdr_init(
     int64_t lowest_discernible_value,
     int64_t highest_trackable_value,
     int yb_bucket_factor,
     struct hdr_histogram* histogram);
 
+/**
+ * Close the hdr_histogram.
+ *
+ * @param h The histogram you want to close.
+ */
+void yb_hdr_close(struct hdr_histogram* h);
+
+#endif
 /**
  * Free the memory and close the hdr_histogram.
  *
@@ -111,16 +126,7 @@ void hdr_close(struct hdr_histogram* h);
  *
  * @deprecated use hdr_init.
  */
-int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram* result);
-
-/**
- * Allocate the memory and initialise the hdr_histogram.  This is the equivalent of calling
- * hdr_init(1, highest_trackable_value, yb_bucket_factor, result);
- *
- * @deprecated use hdr_init.
- */
-int hdr_alloc_pgss(int64_t highest_trackable_value, int yb_bucket_factor, struct hdr_histogram* result);
-
+int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram** result);
 
 /**
  * Reset a histogram to zero - empty out a histogram and re-initialise it
@@ -178,7 +184,7 @@ bool hdr_record_value_atomic(struct hdr_histogram* h, int64_t value);
  * @return false if any value is larger than the highest_trackable_value and can't be recorded,
  * true otherwise.
  */
-bool hdr_record_values(struct hdr_histogram* h, int64_t value, count_type count);
+bool hdr_record_values(struct hdr_histogram* h, int64_t value, count_t count);
 
 /**
  * Records count values in the histogram, will round this value of to a
@@ -195,7 +201,7 @@ bool hdr_record_values(struct hdr_histogram* h, int64_t value, count_type count)
  * @return false if any value is larger than the highest_trackable_value and can't be recorded,
  * true otherwise.
  */
-bool hdr_record_values_atomic(struct hdr_histogram* h, int64_t value, count_type count);
+bool hdr_record_values_atomic(struct hdr_histogram* h, int64_t value, count_t count);
 
 /**
  * Record a value in the histogram and backfill based on an expected interval.
@@ -246,7 +252,7 @@ bool hdr_record_corrected_value_atomic(struct hdr_histogram* h, int64_t value, i
  * @return false if the value is larger than the highest_trackable_value and can't be recorded,
  * true otherwise.
  */
-bool hdr_record_corrected_values(struct hdr_histogram* h, int64_t value, count_type count, int64_t expected_interval);
+bool hdr_record_corrected_values(struct hdr_histogram* h, int64_t value, count_t count, int64_t expected_interval);
 
 /**
  * Record a value in the histogram 'count' times.  Applies the same correcting logic
@@ -263,7 +269,7 @@ bool hdr_record_corrected_values(struct hdr_histogram* h, int64_t value, count_t
  * @return false if the value is larger than the highest_trackable_value and can't be recorded,
  * true otherwise.
  */
-bool hdr_record_corrected_values_atomic(struct hdr_histogram* h, int64_t value, count_type count, int64_t expected_interval);
+bool hdr_record_corrected_values_atomic(struct hdr_histogram* h, int64_t value, count_t count, int64_t expected_interval);
 
 /**
  * Adds all of the values from 'from' to 'this' histogram.  Will return the
@@ -374,9 +380,9 @@ int64_t hdr_lowest_equivalent_value(const struct hdr_histogram* h, int64_t value
  * @return The total count of values recorded in the histogram within the value range that is
  * {@literal >=} lowestEquivalentValue(<i>value</i>) and {@literal <=} highestEquivalentValue(<i>value</i>)
  */
-count_type hdr_count_at_value(const struct hdr_histogram* h, int64_t value);
+count_t hdr_count_at_value(const struct hdr_histogram* h, int64_t value);
 
-count_type hdr_count_at_index(const struct hdr_histogram* h, int32_t index);
+count_t hdr_count_at_index(const struct hdr_histogram* h, int32_t index);
 
 int64_t hdr_value_at_index(const struct hdr_histogram* h, int32_t index);
 
@@ -390,13 +396,13 @@ struct hdr_iter_percentiles
 
 struct hdr_iter_recorded
 {
-    count_type count_added_in_this_iteration_step;
+    count_t count_added_in_this_iteration_step;
 };
 
 struct hdr_iter_linear
 {
     int64_t value_units_per_bucket;
-    count_type count_added_in_this_iteration_step;
+    count_t count_added_in_this_iteration_step;
     int64_t next_value_reporting_level;
     int64_t next_value_reporting_level_lowest_equivalent;
 };
@@ -404,7 +410,7 @@ struct hdr_iter_linear
 struct hdr_iter_log
 {
     double log_base;
-    count_type count_added_in_this_iteration_step;
+    count_t count_added_in_this_iteration_step;
     int64_t next_value_reporting_level;
     int64_t next_value_reporting_level_lowest_equivalent;
 };
@@ -426,7 +432,7 @@ struct hdr_iter
     int64_t total_count;
 
     /** value directly from array for the current counts_index */
-    count_type count;
+    count_t count;
     /** sum of all of the counts up to and including the count at this index */
     int64_t cumulative_count;
     /** The current value based on counts_index */
@@ -538,7 +544,7 @@ int hdr_calculate_bucket_config(
     int significant_figures,
     struct hdr_histogram_bucket_config* cfg);
 
-int hdr_calculate_bucket_config_pgss(
+int yb_hdr_calculate_bucket_config(
     int64_t lowest_discernible_value,
     int64_t highest_trackable_value,
     int yb_bucket_factor,

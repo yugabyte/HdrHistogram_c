@@ -39,9 +39,7 @@ src/Makefile
 src/cmake_install.cmake
 src/libhdr_histogram.so
 src/libhdr_histogram.so.*
-src/libhdr_histogram.6.1.2.dylib
-src/libhdr_histogram.6.dylib
-src/libhdr_histogram.dylib
+src/libhdr_histogram.*.dylib
 test/hdr_histogram_perf
 test/CMakeFiles/
 test/CTestTestfile.cmake

@@ -1,5 +1,13 @@
 /**
  * yb_test.c
+ * Copyright (c) YugaByte, Inc.
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations
+ * under the License.
  */
 
 #include <stdint.h>
@@ -22,13 +30,15 @@
 #pragma warning(disable: 4996)
 #endif
 
-
 int main()
 {
+    #ifdef FLEXIBLE_COUNTS_ARRAY
     struct hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram) + 176*4);
-
-    hdr_init_pgss(1, 16777215, 8, histogram);
-    // hdr_init(1, 16777215, 1, histogram); // original hdr_init still takes in significant figures
+    yb_hdr_init(1, 16777215, 8, histogram);
+    #else
+    struct hdr_histogram* histogram;
+    hdr_init(1, 16777215, 1, &histogram);
+    #endif
 
     printf("subbucket count: %d \n", histogram->sub_bucket_count);
     printf("bucket count: %d \n", histogram->bucket_count);
@@ -85,8 +95,15 @@ int main()
     printf("derived max: %d \n", derived_max);
 
     int prelim_max_value = 3000 / 0.1;
+
+    #ifdef FLEXIBLE_COUNTS_ARRAY
     struct hdr_histogram* dummy = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
-    hdr_init_pgss(1, prelim_max_value, 16, dummy);
+    yb_hdr_init(1, prelim_max_value, 8, dummy);
+    #else
+    struct hdr_histogram* dummy;
+    hdr_init(1, prelim_max_value, 1, &dummy);
+    #endif
+
     int dummy_derived = dummy->sub_bucket_half_count_magnitude + dummy->bucket_count;
     int yb_hdr_max_value = pow(2, dummy_derived) - 1;
     float yb_hdr_max_latency_ms = yb_hdr_max_value * 0.1;

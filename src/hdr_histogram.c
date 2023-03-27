@@ -21,6 +21,8 @@
 #define HDR_MALLOC_INCLUDE "hdr_malloc.h"
 #endif
 
+#define YB_SIG_FIGS 1
+
 #include HDR_MALLOC_INCLUDE
 
 /*  ######   #######  ##     ## ##    ## ########  ######  */
@@ -54,12 +56,12 @@ static int32_t normalize_index(const struct hdr_histogram* h, int32_t index)
     return normalized_index + adjustment;
 }
 
-static count_type counts_get_direct(const struct hdr_histogram* h, int32_t index)
+static count_t counts_get_direct(const struct hdr_histogram* h, int32_t index)
 {
     return h->counts[index];
 }
 
-static count_type counts_get_normalised(const struct hdr_histogram* h, int32_t index)
+static count_t counts_get_normalised(const struct hdr_histogram* h, int32_t index)
 {
     return counts_get_direct(h, normalize_index(h, index));
 }
@@ -275,12 +277,12 @@ void hdr_reset_internal_counters(struct hdr_histogram* h)
 {
     int min_non_zero_index = -1;
     int max_index = -1;
-    count_type observed_total_count = 0;
+    count_t observed_total_count = 0;
     int i;
 
     for (i = 0; i < h->counts_len; i++)
     {
-        count_type count_at_index;
+        count_t count_at_index;
 
         if ((count_at_index = counts_get_direct(h, i)) > 0)
         {
@@ -386,8 +388,7 @@ int hdr_calculate_bucket_config(
     return 0;
 }
 
-
-int hdr_calculate_bucket_config_pgss(
+int yb_hdr_calculate_bucket_config(
         int64_t lowest_discernible_value,
         int64_t highest_trackable_value,
         int yb_bucket_factor,
@@ -395,30 +396,25 @@ int hdr_calculate_bucket_config_pgss(
 {
     int32_t sub_bucket_count_magnitude;
 
-    // yb change: hardcoded sig figs to 1 for memory performance, controlling bucket sizes with yb_bucket_factor
-    int significant_figures = 1;
-    if (lowest_discernible_value < 1 ||
-            significant_figures < 1 || 5 < significant_figures ||
-            lowest_discernible_value * 2 > highest_trackable_value)
-    {
-        return EINVAL;
-    }
-
+    // YB change: hardcoded sig figs to 1 for memory performance, controlling bucket sizes with yb_bucket_factor
     cfg->lowest_discernible_value = lowest_discernible_value;
-    cfg->significant_figures = significant_figures;
+    cfg->significant_figures = YB_SIG_FIGS;
     cfg->highest_trackable_value = highest_trackable_value;
-
-    // yb change: override subbucket count magnitude to set subbuckets per bucket equal to yb_bucket_factor variable
-    switch(yb_bucket_factor)
+    typedef enum {EIGHT = 8, SIXTEEN = 16, THIRTY_TWO = 32} valid_bucket_factor;
+    valid_bucket_factor bf = (valid_bucket_factor) yb_bucket_factor;
+    // YB change: override subbucket count magnitude to set subbuckets per bucket equal to yb_bucket_factor variable
+    switch(bf)
     {
-        case 8:
-        case 16:
-        case 32:
+        case EIGHT:
+            __attribute__ ((fallthrough));
+        case SIXTEEN:
+            __attribute__ ((fallthrough));
+        case THIRTY_TWO:
             sub_bucket_count_magnitude = log(yb_bucket_factor)/log(2);
             break;
         default:
-            printf("Invalid yb_bucket_factor of %d entered, enforcing default of 16 \n", yb_bucket_factor);
-            sub_bucket_count_magnitude = 4;
+            return EINVAL;
+            break;
     }
 
     cfg->sub_bucket_half_count_magnitude = ((sub_bucket_count_magnitude > 1) ? sub_bucket_count_magnitude : 1) - 1;
@@ -463,31 +459,8 @@ void hdr_init_preallocated(struct hdr_histogram* h, struct hdr_histogram_bucket_
     h->total_count                     = 0;
 }
 
-int hdr_init(
-        int64_t lowest_discernible_value,
-        int64_t highest_trackable_value,
-        int significant_figures,
-        struct hdr_histogram* histogram)
-{
-    struct hdr_histogram_bucket_config cfg;
-
-    int r = hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, significant_figures, &cfg);
-    if (r)
-    {
-        return r;
-    }
-
-    if (!histogram)
-    {
-        return ENOMEM;
-    }
-
-    hdr_init_preallocated(histogram, &cfg);
-
-    return 0;
-}
-
-int hdr_init_pgss(
+#ifdef FLEXIBLE_COUNTS_ARRAY
+int yb_hdr_init(
         int64_t lowest_discernible_value,
         int64_t highest_trackable_value,
         int yb_bucket_factor,
@@ -495,7 +468,7 @@ int hdr_init_pgss(
 {
     struct hdr_histogram_bucket_config cfg;
 
-    int r = hdr_calculate_bucket_config_pgss(lowest_discernible_value, highest_trackable_value, yb_bucket_factor, &cfg);
+    int r = yb_hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, yb_bucket_factor, &cfg);
     if (r)
     {
         return r;
@@ -511,24 +484,69 @@ int hdr_init_pgss(
     return 0;
 }
 
-// given we are initializing all hdr_histograms as part of pgssEntry + YB_HISTOGRAM_SIZE, with its own associated cleanup, we should not need to call this in pg_stat_statements.c
-void hdr_close(struct hdr_histogram* h)
+void yb_hdr_close(struct hdr_histogram* h)
 {
     if (h)
     {
         hdr_free(h);
     }
 }
+#endif
 
-int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram* result)
+int hdr_init(
+        int64_t lowest_discernible_value,
+        int64_t highest_trackable_value,
+        int significant_figures,
+        struct hdr_histogram** result)
+{
+    count_t* counts;
+    struct hdr_histogram_bucket_config cfg;
+    struct hdr_histogram* histogram;
+
+    int r = hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, significant_figures, &cfg);
+    if (r)
+    {
+        return r;
+    }
+
+    counts = (count_t*) hdr_calloc((size_t) cfg.counts_len, sizeof(count_t));
+    if (!counts)
+    {
+        return ENOMEM;
+    }
+
+    #ifdef FLEXIBLE_COUNTS_ARRAY
+    histogram = (struct hdr_histogram*) hdr_calloc(1, sizeof(struct hdr_histogram) + cfg.counts_len * sizeof(count_t));
+    #else
+    histogram = (struct hdr_histogram*) hdr_calloc(1, sizeof(struct hdr_histogram));
+    if (!histogram)
+    {
+        hdr_free(counts);
+        return ENOMEM;
+    }
+
+    histogram->counts = counts;
+    #endif
+
+    hdr_init_preallocated(histogram, &cfg);
+    *result = histogram;
+
+    return 0;
+}
+
+void hdr_close(struct hdr_histogram* h)
+{
+    if (h) {
+    hdr_free(h->counts);
+    hdr_free(h);
+    }
+}
+
+int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram** result)
 {
     return hdr_init(1, highest_trackable_value, significant_figures, result);
 }
 
-int hdr_alloc_pgss(int64_t highest_trackable_value, int yb_bucket_factor, struct hdr_histogram* result)
-{
-    return hdr_init_pgss(1, highest_trackable_value, yb_bucket_factor, result);
-}
 
 /* reset a histogram to zero. */
 void hdr_reset(struct hdr_histogram *h)
@@ -536,12 +554,12 @@ void hdr_reset(struct hdr_histogram *h)
      h->total_count=0;
      h->min_value = INT64_MAX;
      h->max_value = 0;
-     memset(h->counts, 0, (sizeof(count_type) * h->counts_len));
+     memset(h->counts, 0, (sizeof(count_t) * h->counts_len));
 }
 
 size_t hdr_get_memory_size(struct hdr_histogram *h)
 {
-    return sizeof(struct hdr_histogram) + h->counts_len * sizeof(count_type);
+    return sizeof(struct hdr_histogram) + h->counts_len * sizeof(count_t);
 }
 
 /* ##     ## ########  ########     ###    ######## ########  ######  */
@@ -563,7 +581,7 @@ bool hdr_record_value_atomic(struct hdr_histogram* h, int64_t value)
     return hdr_record_values_atomic(h, value, 1);
 }
 
-bool hdr_record_values(struct hdr_histogram* h, int64_t value, count_type count)
+bool hdr_record_values(struct hdr_histogram* h, int64_t value, count_t count)
 {
     int32_t counts_index;
 
@@ -586,7 +604,7 @@ bool hdr_record_values(struct hdr_histogram* h, int64_t value, count_type count)
     return true;
 }
 
-bool hdr_record_values_atomic(struct hdr_histogram* h, int64_t value, count_type count)
+bool hdr_record_values_atomic(struct hdr_histogram* h, int64_t value, count_t count)
 {
     int32_t counts_index;
 
@@ -618,7 +636,7 @@ bool hdr_record_corrected_value_atomic(struct hdr_histogram* h, int64_t value, i
     return hdr_record_corrected_values_atomic(h, value, 1, expected_interval);
 }
 
-bool hdr_record_corrected_values(struct hdr_histogram* h, int64_t value, count_type count, int64_t expected_interval)
+bool hdr_record_corrected_values(struct hdr_histogram* h, int64_t value, count_t count, int64_t expected_interval)
 {
     int64_t missing_value;
 
@@ -644,7 +662,7 @@ bool hdr_record_corrected_values(struct hdr_histogram* h, int64_t value, count_t
     return true;
 }
 
-bool hdr_record_corrected_values_atomic(struct hdr_histogram* h, int64_t value, count_type count, int64_t expected_interval)
+bool hdr_record_corrected_values_atomic(struct hdr_histogram* h, int64_t value, count_t count, int64_t expected_interval)
 {
     int64_t missing_value;
 
@@ -679,7 +697,7 @@ int64_t hdr_add(struct hdr_histogram* h, const struct hdr_histogram* from)
     while (hdr_iter_next(&iter))
     {
         int64_t value = iter.value;
-        count_type count = iter.count;
+        count_t count = iter.count;
 
         if (!hdr_record_values(h, value, count))
         {
@@ -700,7 +718,7 @@ int64_t hdr_add_while_correcting_for_coordinated_omission(
     while (hdr_iter_next(&iter))
     {
         int64_t value = iter.value;
-        count_type count = iter.count;
+        count_t count = iter.count;
 
         if (!hdr_record_corrected_values(h, value, count, expected_interval))
         {
@@ -742,9 +760,9 @@ int64_t hdr_min(const struct hdr_histogram* h)
     return non_zero_min(h);
 }
 
-static int64_t get_value_from_idx_up_to_count(const struct hdr_histogram* h, count_type count_at_percentile)
+static int64_t get_value_from_idx_up_to_count(const struct hdr_histogram* h, count_t count_at_percentile)
 {
-    count_type count_to_idx = 0;
+    count_t count_to_idx = 0;
 
     count_at_percentile = 0 < count_at_percentile ? count_at_percentile : 1;
     for (int32_t idx = 0; idx < h->counts_len; idx++)
@@ -763,7 +781,7 @@ static int64_t get_value_from_idx_up_to_count(const struct hdr_histogram* h, cou
 int64_t hdr_value_at_percentile(const struct hdr_histogram* h, double percentile)
 {
     double requested_percentile = percentile < 100.0 ? percentile : 100.0;
-    count_type count_at_percentile = ((requested_percentile / 100) * h->total_count) + 0.5;
+    count_t count_at_percentile = ((requested_percentile / 100) * h->total_count) + 0.5;
     int64_t value_from_idx = get_value_from_idx_up_to_count(h, count_at_percentile);
     if (percentile == 0.0)
     {
@@ -786,8 +804,8 @@ int hdr_value_at_percentiles(const struct hdr_histogram *h, const double *percen
     for (size_t i = 0; i < length; i++)
     {
         const double requested_percentile = percentiles[i] < 100.0 ? percentiles[i] : 100.0;
-        const count_type count_at_percentile =
-        (count_type) (((requested_percentile / 100) * total_count) + 0.5);
+        const count_t count_at_percentile =
+        (count_t) (((requested_percentile / 100) * total_count) + 0.5);
         values[i] = count_at_percentile > 1 ? count_at_percentile : 1;
     }
 
@@ -854,12 +872,12 @@ int64_t hdr_lowest_equivalent_value(const struct hdr_histogram* h, int64_t value
     return lowest_equivalent_value(h, value);
 }
 
-count_type hdr_count_at_value(const struct hdr_histogram* h, int64_t value)
+count_t hdr_count_at_value(const struct hdr_histogram* h, int64_t value)
 {
     return counts_get_normalised(h, counts_index_for(h, value));
 }
 
-count_type hdr_count_at_index(const struct hdr_histogram* h, int32_t index)
+count_t hdr_count_at_index(const struct hdr_histogram* h, int32_t index)
 {
     return counts_get_normalised(h, index);
 }
