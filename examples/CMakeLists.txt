@@ -5,7 +5,8 @@ if (HDR_LOG_ENABLED)
     target_link_libraries(hdr_decoder
         PRIVATE
             $<$<BOOL:${WIN32}>:hdr_histogram_static>
-            $<$<NOT:$<BOOL:${WIN32}>>:hdr_histogram>)
+            $<$<NOT:$<BOOL:${WIN32}>>:hdr_histogram>
+            m)
     install(
         TARGETS hdr_decoder
         EXPORT ${PROJECT_NAME}-targets
