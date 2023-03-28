@@ -34,7 +34,7 @@ int main()
 {
     #ifdef FLEXIBLE_COUNTS_ARRAY
     struct hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram) + 176*4);
-    yb_hdr_init(1, 16777215, 8, histogram);
+    yb_hdr_init(1, 16777215, 16, histogram);
     #else
     struct hdr_histogram* histogram;
     hdr_init(1, 16777215, 1, &histogram);
@@ -69,17 +69,12 @@ int main()
 
     printf("\nPrinting \n\n");
     struct hdr_iter iter;
-    char * result;
-    result = malloc(2000);
 
     hdr_iter_init(&iter, histogram);
     while(hdr_iter_next(&iter))
     {
-        char buf[100];
-        snprintf(buf, 100,"index: %d, [%lld-%lld), count: %d \n",iter.counts_index, iter.value_iterated_to, iter.highest_equivalent_value + 1, iter.count);
-        strncat(result, buf, strlen(buf));
+        printf("index: %d, [%lld-%lld), count: %d \n",iter.counts_index, iter.value_iterated_to, iter.highest_equivalent_value + 1, iter.count);
     }
-    printf("%s \n", result);
 
     int64_t p90 = hdr_value_at_percentile(histogram, 90);
     int64_t p50 = hdr_value_at_percentile(histogram, 50);
@@ -95,6 +90,7 @@ int main()
     printf("derived max: %d \n", derived_max);
 
     int prelim_max_value = 3000 / 0.1;
+    printf("prelim_max_value: %d \n", prelim_max_value);
 
     #ifdef FLEXIBLE_COUNTS_ARRAY
     struct hdr_histogram* dummy = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
