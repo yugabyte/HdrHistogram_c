@@ -48,7 +48,8 @@ function(hdr_histogram_add_test_executable NAME)
         minunit.h)
     target_link_libraries(${NAME}
         PRIVATE
-            hdr_histogram_static)
+            hdr_histogram_static
+            m)
     target_include_directories(${NAME}
         PRIVATE
             ${PROJECT_SOURCE_DIR}/src)
@@ -63,6 +64,7 @@ function(hdr_histogram_add_test NAME)
 endfunction()
 
 hdr_histogram_add_test(hdr_histogram_test)
+hdr_histogram_add_test(yb_test)
 hdr_histogram_add_test(hdr_histogram_atomic_test)
 if (HDR_LOG_ENABLED)
     hdr_histogram_add_test(hdr_histogram_log_test)

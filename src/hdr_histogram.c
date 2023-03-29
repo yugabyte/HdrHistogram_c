@@ -348,6 +348,13 @@ static int bucket_config_helper(
         int sub_bucket_count_magnitude,
         struct hdr_histogram_bucket_config* cfg)
 {
+
+    if (lowest_discernible_value < 1 ||
+        lowest_discernible_value * 2 > highest_trackable_value)
+    {
+        return EINVAL;
+    }
+
     cfg->lowest_discernible_value = lowest_discernible_value;
     cfg->highest_trackable_value = highest_trackable_value;
     cfg->sub_bucket_half_count_magnitude = ((sub_bucket_count_magnitude > 1) ? sub_bucket_count_magnitude : 1) - 1;
@@ -380,16 +387,13 @@ int hdr_calculate_bucket_config(
         int significant_figures,
         struct hdr_histogram_bucket_config* cfg)
 {
-    int32_t sub_bucket_count_magnitude;
-    int64_t largest_value_with_single_unit_resolution;
-
-    if (lowest_discernible_value < 1 ||
-            significant_figures < 1 || 5 < significant_figures ||
-            lowest_discernible_value * 2 > highest_trackable_value)
+    if (significant_figures < 1 || 5 < significant_figures) 
     {
         return EINVAL;
     }
     cfg->significant_figures = significant_figures;
+    int32_t sub_bucket_count_magnitude;
+    int64_t largest_value_with_single_unit_resolution;
 
     largest_value_with_single_unit_resolution = 2 * power(10, significant_figures);
     sub_bucket_count_magnitude = (int32_t) ceil(log((double)largest_value_with_single_unit_resolution) / log(2));
@@ -497,15 +501,16 @@ int hdr_init(
         return r;
     }
 
+    #ifdef FLEXIBLE_COUNTS_ARRAY
+    histogram = (struct hdr_histogram*) hdr_calloc(1, sizeof(struct hdr_histogram) + cfg.counts_len * sizeof(count_t));
+    #else
+
     counts = (count_t*) hdr_calloc((size_t) cfg.counts_len, sizeof(count_t));
     if (!counts)
     {
         return ENOMEM;
     }
 
-    #ifdef FLEXIBLE_COUNTS_ARRAY
-    histogram = (struct hdr_histogram*) hdr_calloc(1, sizeof(struct hdr_histogram) + cfg.counts_len * sizeof(count_t));
-    #else
     histogram = (struct hdr_histogram*) hdr_calloc(1, sizeof(struct hdr_histogram));
     if (!histogram)
     {
@@ -524,9 +529,15 @@ int hdr_init(
 
 void hdr_close(struct hdr_histogram* h)
 {
-    if (h) {
-    hdr_free(h->counts);
-    hdr_free(h);
+    if (h)
+    {
+        #ifdef FLEXIBLE_COUNTS_ARRAY
+        hdr_free(h);
+        #else
+        hdr_free(h->counts);
+        hdr_free(h);
+        #endif
+
     }
 }
 

@@ -11,18 +11,6 @@ if (HDR_LOG_ENABLED)
         EXPORT ${PROJECT_NAME}-targets
         DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-    add_executable(yb_test
-        yb_test.c)
-    target_link_libraries(yb_test
-        PRIVATE
-            $<$<BOOL:${WIN32}>:hdr_histogram_static>
-            $<$<NOT:$<BOOL:${WIN32}>>:hdr_histogram>
-            m)
-    install(
-        TARGETS yb_test
-        EXPORT ${PROJECT_NAME}-targets
-        DESTINATION ${CMAKE_INSTALL_BINDIR})
-
     if(CMAKE_SYSTEM_NAME MATCHES "Linux")
         find_package(Threads)
 

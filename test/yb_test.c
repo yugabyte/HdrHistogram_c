@@ -25,10 +25,94 @@
 #include <hdr/hdr_histogram.h>
 #include <hdr/hdr_histogram_log.h>
 
+#include "minunit.h"
+#include "hdr_test_util.h"
+
 #if defined(_MSC_VER)
 #pragma warning(push)
 #pragma warning(disable: 4996)
 #endif
+
+int tests_run = 0;
+
+static char* yb_test_create(void)
+{
+    // counts array not allocated here, would need calloc(sizeof(hdr_histogram) + 176 * 4) for full allocation
+    #ifdef FLEXIBLE_COUNTS_ARRAY
+    hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
+    int r = yb_hdr_init(1, 16777215, 16, histogram);
+    #else
+    struct hdr_histogram* histogram;
+    int r = hdr_init(1, 16777215, 1, &histogram);
+    #endif
+
+
+    mu_assert("Failed to allocate hdr_histogram", r == 0);
+    mu_assert("Failed to allocate hdr_histogram", histogram != NULL);
+
+    #ifdef FLEXIBLE_COUNTS_ARRAY
+    mu_assert("Incorrect array length", compare_int64(histogram->counts_len, 176));
+    #else
+    mu_assert("Incorrect array length", compare_int64(histogram->counts_len, 336));
+    #endif
+
+    free(histogram);
+
+    return 0;
+}
+
+static char* test_create_with_large_values(void)
+{
+    struct hdr_histogram* h = NULL;
+    int r = hdr_init(20000000, 100000000, 5, &h);
+    mu_assert("Didn't create", r == 0);
+
+    hdr_record_value(h, 100000000);
+    hdr_record_value(h, 20000000);
+    hdr_record_value(h, 30000000);
+
+    mu_assert(
+        "50.0% Percentile",
+        hdr_values_are_equivalent(h, 20000000, hdr_value_at_percentile(h, 50.0)));
+
+    mu_assert(
+        "83.33% Percentile",
+        hdr_values_are_equivalent(h, 30000000, hdr_value_at_percentile(h, 83.33)));
+
+    mu_assert(
+        "83.34% Percentile",
+        hdr_values_are_equivalent(h, 100000000, hdr_value_at_percentile(h, 83.34)));
+
+    mu_assert(
+        "99.0% Percentile",
+        hdr_values_are_equivalent(h, 100000000, hdr_value_at_percentile(h, 99.0)));
+
+    return 0;
+}
+
+static struct mu_result all_tests(void)
+{
+    mu_run_test(yb_test_create);
+    mu_ok;
+}
+
+static int hdr_histogram_run_tests(void)
+{
+    struct mu_result result = all_tests();
+
+    if (result.message != 0)
+    {
+        printf("hdr_histogram_test.%s(): %s\n", result.test, result.message);
+    }
+    else
+    {
+        printf("ALL TESTS PASSED\n");
+    }
+
+    printf("Tests run: %d\n", tests_run);
+
+    return result.message == NULL ? 0 : -1;
+}
 
 int main()
 {
@@ -104,7 +188,8 @@ int main()
     int yb_hdr_max_value = pow(2, dummy_derived) - 1;
     float yb_hdr_max_latency_ms = yb_hdr_max_value * 0.1;
     printf("prelim_max_value: %d, yb_hdr_max_value: %d, yb_hdr_max_latency_ms: %f \n", prelim_max_value, yb_hdr_max_value, yb_hdr_max_latency_ms);
-    return 0;
+    
+    return hdr_histogram_run_tests();
 }
 
 #if defined(_MSC_VER)
