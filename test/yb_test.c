@@ -231,7 +231,7 @@ static char* yb_insert_test(void)
     mu_assert("Incorrect p50 value", compare_values(hdr_value_at_percentile(h, 50), 17, 0.001));
     mu_assert("Incorrect p90 value", compare_values(hdr_value_at_percentile(h, 90), 9437183, 0.001));
     mu_assert("Incorrect p99 value", compare_values(hdr_value_at_percentile(h, 99), yb_default_max, 0.001));
-    print_subbuckets(h);
+
     hdr_close(h);
 
     #endif
