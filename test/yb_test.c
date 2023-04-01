@@ -26,7 +26,6 @@
 #include <hdr/hdr_histogram_log.h>
 
 #include "minunit.h"
-#include "hdr_test_util.h"
 
 #if defined(_MSC_VER)
 #pragma warning(push)
@@ -34,37 +33,79 @@
 #endif
 
 int tests_run = 0;
+int yb_default_max = 16777215;
+int yb_default_bucket_factor = 16;
 
+static int get_subbucket_width(hdr_histogram* h, int value)
+{
+    return hdr_next_non_equivalent_value(h, value) - lowest_equivalent_value(h, value);
+}
+
+static bool compare_values(double a, double b, double variation)
+{
+    return compare_double(a, b, b * variation);
+}
+
+static char* print_subbuckets(hdr_histogram* h)
+{
+    struct hdr_iter iter;
+    hdr_iter_init(&iter, h);
+    while(hdr_iter_next(&iter))
+    {
+        printf("index: %d, [%lld-%lld), count: %"COUNT_PRINT_FORMAT" \n",iter.counts_index, iter.value_iterated_to,
+            iter.highest_equivalent_value + 1, iter.count);
+    }
+    return 0;
+}
+
+/* 
+ * histogram initialization and counts len test
+ */
 static char* yb_test_create(void)
 {
-    // counts array not allocated here, would need calloc(sizeof(hdr_histogram) + 176 * 4) for full allocation
+    /* 
+     * counts array not allocated here, would need calloc(sizeof(hdr_histogram) + 176 * 
+     * sizeof(count_t)) for full allocation
+     */
     #ifdef FLEXIBLE_COUNTS_ARRAY
-    hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
-    int r = yb_hdr_init(1, 16777215, 16, histogram);
+    hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
+    int r = yb_hdr_init(1, yb_default_max, yb_default_bucket_factor, h);
     #else
-    struct hdr_histogram* histogram;
-    int r = hdr_init(1, 16777215, 1, &histogram);
+    hdr_histogram* h;
+    int r = hdr_init(1, yb_default_max, 1, &h);
     #endif
-
 
     mu_assert("Failed to allocate hdr_histogram", r == 0);
-    mu_assert("Failed to allocate hdr_histogram", histogram != NULL);
+    mu_assert("Failed to allocate hdr_histogram", h != NULL);
 
     #ifdef FLEXIBLE_COUNTS_ARRAY
-    mu_assert("Incorrect array length", compare_int64(histogram->counts_len, 176));
+    mu_assert("Incorrect counts array length", compare_int64(h->counts_len, 176));
     #else
-    mu_assert("Incorrect array length", compare_int64(histogram->counts_len, 336));
+    mu_assert("Incorrect counts array length", compare_int64(h->counts_len, 336));
     #endif
 
-    free(histogram);
+    hdr_close(h);
 
     return 0;
 }
 
-static char* test_create_with_large_values(void)
+/* 
+ * percentile calc test ported over from hdr_histogram_test.c
+ */
+static char* yb_test_create_with_large_values(void)
 {
-    struct hdr_histogram* h = NULL;
-    int r = hdr_init(20000000, 100000000, 5, &h);
+    #ifdef FLEXIBLE_COUNTS_ARRAY
+    hdr_histogram* dummy = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
+    yb_hdr_init(20000000, 100000000, 32, dummy);
+    hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram) + 
+        dummy->counts_len * sizeof(count_t));
+    hdr_close(dummy);
+    int r = yb_hdr_init(20000000, 100000000, 32, h);
+    #else
+    hdr_histogram* h;
+    int r = hdr_init(20000000, 100000000, 1, &h);
+    #endif
+
     mu_assert("Didn't create", r == 0);
 
     hdr_record_value(h, 100000000);
@@ -72,20 +113,190 @@ static char* test_create_with_large_values(void)
     hdr_record_value(h, 30000000);
 
     mu_assert(
-        "50.0% Percentile",
+        "Incorrect 50.0% Percentile",
         hdr_values_are_equivalent(h, 20000000, hdr_value_at_percentile(h, 50.0)));
 
     mu_assert(
-        "83.33% Percentile",
+        "Incorrect 83.33% Percentile",
         hdr_values_are_equivalent(h, 30000000, hdr_value_at_percentile(h, 83.33)));
 
     mu_assert(
-        "83.34% Percentile",
+        "Incorrect 83.34% Percentile",
         hdr_values_are_equivalent(h, 100000000, hdr_value_at_percentile(h, 83.34)));
 
     mu_assert(
-        "99.0% Percentile",
+        "Incorrect 99.0% Percentile",
         hdr_values_are_equivalent(h, 100000000, hdr_value_at_percentile(h, 99.0)));
+
+    hdr_close(h);
+
+    return 0;
+}
+
+/* 
+ * test invalid bucket factor (yb) or sig fig input (mainline hdr_histogram)
+ */
+static char* yb_test_invalid_bucket_factor(void)
+{
+    #ifdef FLEXIBLE_COUNTS_ARRAY
+    hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
+    int r = yb_hdr_init(1, yb_default_max, -1, h);
+    #else
+    hdr_histogram* h = NULL;
+    int r = hdr_alloc(yb_default_max, -1, &h);
+    #endif
+
+    mu_assert("Result was not EINVAL", r == EINVAL);
+
+    #ifndef FLEXIBLE_COUNTS_ARRAY
+    mu_assert("Histogram was not null", h == 0);
+    #endif
+
+    hdr_close(h);
+
+    return 0;
+}
+
+/* 
+ * confirm inserts are recorded in the expected subbuckets
+ * we are interested in yb default config only so we skip the body when
+ * FLEXIBLE_COUNTS_ARRAY is not set up - that would be a 32 sub_bucket_count histogram
+ */
+static char* yb_insert_test(void)
+{
+    #if defined(FLEXIBLE_COUNTS_ARRAY) && defined(USE_SHORT_COUNT_TYPE)
+
+    hdr_histogram* dummy = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
+    yb_hdr_init(1, yb_default_max, yb_default_bucket_factor, dummy);
+    hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram) + 
+        dummy->counts_len * sizeof(count_t));
+    hdr_close(dummy);
+    int r = yb_hdr_init(1, yb_default_max, yb_default_bucket_factor, h);
+
+    mu_assert("Didn't create", r == 0);
+
+    mu_assert("Incorrect hdr_histogram struct size", compare_int64(sizeof(hdr_histogram), 96));
+    mu_assert("Incorrect hdr_histogram total size", compare_int64(hdr_get_memory_size(h), 800));
+    mu_assert("Incorrect subbucket count", compare_int64(h->sub_bucket_count,
+        yb_default_bucket_factor));
+    mu_assert("Incorrect bucket count", compare_int64(h->bucket_count, 21));
+
+    /* 
+     * first bucket
+     */
+    hdr_record_value(h, 1);
+    hdr_record_value(h, 5);
+
+    /* 
+     * bucket becomes resolution 2, 17 will be recorded as 16
+     */
+    hdr_record_values(h, 17, 3);
+
+    /* 
+     * second-to-last-bucket
+     */
+    hdr_record_value(h, 8388607);
+
+    /* 
+     * beginning of last bucket, check these values fall into same subbucket
+     */
+    hdr_record_value(h, 8388608);
+    hdr_record_value(h, 9000000);
+
+    /* 
+     * max value and beyond max, check that 16777216 is not recorded but 16777215 is
+     */
+    hdr_record_value(h, yb_default_max);
+    hdr_record_value(h, yb_default_max + 1);
+
+    mu_assert("Incorrect first bucket value", compare_int64(h->counts[1], 1));
+    mu_assert("Incorrect first bucket value", compare_int64(h->counts[5], 1));
+
+    mu_assert("Incorrect second bucket value", compare_int64(h->counts[16], 3));
+
+    mu_assert("Incorrect penultimate bucket value", compare_int64(h->counts[167], 1));
+    mu_assert("Incorrect last bucket value", compare_int64(h->counts[168], 2));
+
+    mu_assert("Incorrect last subbucket value", compare_int64(h->counts[h->counts_len - 1], 1));
+
+    mu_assert("Incorrect subbucket width", compare_int64(get_subbucket_width(h, 123), 8));
+
+    int final_subbucket_beg = yb_default_max + 1 - get_subbucket_width(h, yb_default_max);
+
+    mu_assert("Incorrect final subbucket beginning", compare_int64(
+        lowest_equivalent_value(h, yb_default_max), final_subbucket_beg));
+    mu_assert("Incorrect final subbucket end", compare_int64(
+        highest_equivalent_value(h, yb_default_max), yb_default_max));
+
+    mu_assert("Incorrect p50 value", compare_values(hdr_value_at_percentile(h, 50), 17, 0.001));
+    mu_assert("Incorrect p90 value", compare_values(hdr_value_at_percentile(h, 90), 9437183, 0.001));
+    mu_assert("Incorrect p99 value", compare_values(hdr_value_at_percentile(h, 99), yb_default_max, 0.001));
+    print_subbuckets(h);
+    hdr_close(h);
+
+    #endif
+
+    return 0;
+}
+
+/* 
+ * confirm we can calculate the actual histogram maximum for an arbitrary histogram max input 
+ * like 30000, using only subbucket size and bucket count
+ * we are interested in yb default config only so we skip the body when
+ * FLEXIBLE_COUNTS_ARRAY is not set up - that would be a 32 sub_bucket_count histogram
+ */
+static char* yb_derived_max_test(void)
+{
+    #if defined(FLEXIBLE_COUNTS_ARRAY) && defined(USE_SHORT_COUNT_TYPE)
+
+    int test_max = 30000;
+    hdr_histogram* dummy = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
+    yb_hdr_init(1, test_max, yb_default_bucket_factor, dummy);
+    hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram) + 
+        dummy->counts_len * sizeof(count_t));
+    hdr_close(dummy);
+    int r = yb_hdr_init(1, test_max, yb_default_bucket_factor, h);
+
+    mu_assert("Didn't create", r == 0);
+
+    mu_assert("Incorrect hdr_histogram total size", compare_int64(hdr_get_memory_size(h), 512));
+    mu_assert("Incorrect subbucket count", compare_int64(h->sub_bucket_count,
+        yb_default_bucket_factor));
+    mu_assert("Incorrect bucket count", compare_int64(h->bucket_count, 12));
+    mu_assert("Incorrect counts len", compare_int64(h->counts_len, 104));
+    mu_assert("Incorrect subbucket width", compare_int64(get_subbucket_width(h, 6000), 512));
+
+    /* 
+     * check that we can derive actual max value of histogram
+     */
+    int h_magnitude = h->sub_bucket_half_count_magnitude + h->bucket_count;
+    int derived_max = pow(2, h_magnitude) - 1;
+    mu_assert("Incorrect derived_max value", compare_int64(derived_max, 32767));
+
+    /* 
+     * derived and test max should belong to same bucket, and have same subbucket sizes
+     */
+    mu_assert("test_max and derived_max should belong to same bucket", 
+        compare_int64(get_subbucket_width(h, test_max), get_subbucket_width(h, derived_max)));
+    get_subbucket_width(h, test_max);
+
+    int final_subbucket_beg = derived_max + 1 - get_subbucket_width(h, derived_max);
+
+    mu_assert("Incorrect final subbucket beginning", compare_int64(
+        lowest_equivalent_value(h, derived_max), final_subbucket_beg));
+    mu_assert("Incorrect final subbucket end", compare_int64(
+        highest_equivalent_value(h, derived_max), derived_max));
+
+    /* 
+     * should not be able to record beyond derived max
+     */
+    hdr_record_value(h, derived_max);
+    hdr_record_value(h, derived_max + 1);
+    mu_assert("recorded value beyond derived_max", compare_int64(h->counts[h->counts_len - 1], 1));
+
+    hdr_close(h);
+
+    #endif
 
     return 0;
 }
@@ -93,6 +304,10 @@ static char* test_create_with_large_values(void)
 static struct mu_result all_tests(void)
 {
     mu_run_test(yb_test_create);
+    mu_run_test(yb_test_create_with_large_values);
+    mu_run_test(yb_test_invalid_bucket_factor);
+    mu_run_test(yb_insert_test);
+    mu_run_test(yb_derived_max_test);
     mu_ok;
 }
 
@@ -115,80 +330,7 @@ static int hdr_histogram_run_tests(void)
 }
 
 int main()
-{
-    #ifdef FLEXIBLE_COUNTS_ARRAY
-    struct hdr_histogram* histogram = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram) + 176*4);
-    yb_hdr_init(1, 16777215, 16, histogram);
-    #else
-    struct hdr_histogram* histogram;
-    hdr_init(1, 16777215, 1, &histogram);
-    #endif
-
-    printf("subbucket count: %d \n", histogram->sub_bucket_count);
-    printf("bucket count: %d \n", histogram->bucket_count);
-
-    hdr_record_value(histogram, 1);
-    hdr_record_value(histogram, 2);
-    hdr_record_value(histogram, 3);
-    hdr_record_value(histogram, 4);
-    hdr_record_value(histogram, 4);
-    hdr_record_value(histogram, 31);
-    hdr_record_value(histogram, 32);
-    hdr_record_value(histogram, 33);
-    hdr_record_value(histogram, 8388607);
-    hdr_record_value(histogram, 8388608);
-    hdr_record_value(histogram, 9000000);
-    hdr_record_value(histogram, 16777215);
-    hdr_record_values(histogram, 1, 4);
-    hdr_record_value(histogram, 2);
-    hdr_record_value(histogram, 8);
-
-    printf("total number of subbuckets: %d \n", histogram->counts_len);
-
-    int mem = hdr_get_memory_size(histogram);
-    printf("Footprint: histogram struct size: %lu, total size: %d \n", sizeof(struct hdr_histogram), mem);
-
-    // printf("\nPercentiles Printing\n\n");
-    // hdr_percentiles_print(histogram,stdout,5,1.0);
-
-    printf("\nPrinting \n\n");
-    struct hdr_iter iter;
-
-    hdr_iter_init(&iter, histogram);
-    while(hdr_iter_next(&iter))
-    {
-        printf("index: %d, [%lld-%lld), count: %d \n",iter.counts_index, iter.value_iterated_to, iter.highest_equivalent_value + 1, iter.count);
-    }
-
-    int64_t p90 = hdr_value_at_percentile(histogram, 90);
-    int64_t p50 = hdr_value_at_percentile(histogram, 50);
-    int64_t p99 = hdr_value_at_percentile(histogram, 99);
-
-    printf("p99: %lld, p90: %lld, p50: %lld \n", p99, p90, p50);
-
-
-    // max value adjustment calculations
-    printf("max value: %lld, highest_trackable_value: %lld \n", histogram->max_value, histogram->highest_trackable_value);
-    int derived_max_mag = histogram->sub_bucket_half_count_magnitude + 1 + histogram->bucket_count - 1;
-    int derived_max = pow(2, derived_max_mag);
-    printf("derived max: %d \n", derived_max);
-
-    int prelim_max_value = 3000 / 0.1;
-    printf("prelim_max_value: %d \n", prelim_max_value);
-
-    #ifdef FLEXIBLE_COUNTS_ARRAY
-    struct hdr_histogram* dummy = (struct hdr_histogram*) calloc(1, sizeof(struct hdr_histogram));
-    yb_hdr_init(1, prelim_max_value, 8, dummy);
-    #else
-    struct hdr_histogram* dummy;
-    hdr_init(1, prelim_max_value, 1, &dummy);
-    #endif
-
-    int dummy_derived = dummy->sub_bucket_half_count_magnitude + dummy->bucket_count;
-    int yb_hdr_max_value = pow(2, dummy_derived) - 1;
-    float yb_hdr_max_latency_ms = yb_hdr_max_value * 0.1;
-    printf("prelim_max_value: %d, yb_hdr_max_value: %d, yb_hdr_max_latency_ms: %f \n", prelim_max_value, yb_hdr_max_value, yb_hdr_max_latency_ms);
-    
+{ 
     return hdr_histogram_run_tests();
 }
 

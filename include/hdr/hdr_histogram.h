@@ -105,13 +105,6 @@ int yb_hdr_init(
     int yb_bucket_factor,
     struct hdr_histogram* histogram);
 
-/**
- * Close the hdr_histogram.
- *
- * @param h The histogram you want to close.
- */
-void yb_hdr_close(struct hdr_histogram* h);
-
 #endif
 /**
  * Free the memory and close the hdr_histogram.
@@ -554,7 +547,11 @@ void hdr_init_preallocated(struct hdr_histogram* h, struct hdr_histogram_bucket_
 
 int64_t hdr_size_of_equivalent_value_range(const struct hdr_histogram* h, int64_t value);
 
+int64_t lowest_equivalent_value(const hdr_histogram* h, int64_t value);
+
 int64_t hdr_next_non_equivalent_value(const struct hdr_histogram* h, int64_t value);
+
+int64_t highest_equivalent_value(const hdr_histogram* h, int64_t value);
 
 int64_t hdr_median_equivalent_value(const struct hdr_histogram* h, int64_t value);
 
