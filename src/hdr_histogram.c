@@ -28,6 +28,12 @@
 
 typedef struct hdr_histogram_bucket_config hdr_histogram_bucket_config;
 
+static int yb_bucket_config_helper(
+        int64_t lowest_discernible_value,
+        int64_t highest_trackable_value,
+        int sub_bucket_count_magnitude,
+        hdr_histogram_bucket_config* cfg);
+
 /*  ######   #######  ##     ## ##    ## ########  ######  */
 /* ##    ## ##     ## ##     ## ###   ##    ##    ##    ## */
 /* ##       ##     ## ##     ## ####  ##    ##    ##       */
@@ -346,45 +352,6 @@ static int32_t buckets_needed_to_cover_value(int64_t value, int32_t sub_bucket_c
 /* ##     ## ##       ##     ## ##     ## ##    ##     ##    */
 /* ##     ## ######## ##     ##  #######  ##     ##    ##    */
 
-static int bucket_config_helper(
-        int64_t lowest_discernible_value,
-        int64_t highest_trackable_value,
-        int sub_bucket_count_magnitude,
-        hdr_histogram_bucket_config* cfg)
-{
-
-    if (lowest_discernible_value < 1 ||
-        lowest_discernible_value * 2 > highest_trackable_value)
-    {
-        return EINVAL;
-    }
-
-    cfg->lowest_discernible_value = lowest_discernible_value;
-    cfg->highest_trackable_value = highest_trackable_value;
-    cfg->sub_bucket_half_count_magnitude = ((sub_bucket_count_magnitude > 1) ? sub_bucket_count_magnitude : 1) - 1;
-
-    double unit_magnitude = log((double)lowest_discernible_value) / log(2);
-    if (INT32_MAX < unit_magnitude)
-    {
-        return EINVAL;
-    }
-
-    cfg->unit_magnitude = (int32_t) unit_magnitude;
-    cfg->sub_bucket_count      = (int32_t) pow(2, (cfg->sub_bucket_half_count_magnitude + 1));
-    cfg->sub_bucket_half_count = cfg->sub_bucket_count / 2;
-    cfg->sub_bucket_mask       = ((int64_t) cfg->sub_bucket_count - 1) << cfg->unit_magnitude;
-
-    if (cfg->unit_magnitude + cfg->sub_bucket_half_count_magnitude > 61)
-    {
-        return EINVAL;
-    }
-
-    cfg->bucket_count = buckets_needed_to_cover_value(highest_trackable_value, cfg->sub_bucket_count, (int32_t)cfg->unit_magnitude);
-    cfg->counts_len = (cfg->bucket_count + 1) * (cfg->sub_bucket_count / 2);
-
-    return 0;
-}
-
 int hdr_calculate_bucket_config(
         int64_t lowest_discernible_value,
         int64_t highest_trackable_value,
@@ -402,7 +369,7 @@ int hdr_calculate_bucket_config(
     largest_value_with_single_unit_resolution = 2 * power(10, significant_figures);
     sub_bucket_count_magnitude = (int32_t) ceil(log((double)largest_value_with_single_unit_resolution) / log(2));
 
-    return bucket_config_helper(lowest_discernible_value, highest_trackable_value, sub_bucket_count_magnitude, cfg);
+    return yb_bucket_config_helper(lowest_discernible_value, highest_trackable_value, sub_bucket_count_magnitude, cfg);
 }
 
 int yb_hdr_calculate_bucket_config(
@@ -439,7 +406,7 @@ int yb_hdr_calculate_bucket_config(
             break;
     }
 
-    return bucket_config_helper(lowest_discernible_value, highest_trackable_value, sub_bucket_count_magnitude, cfg);
+    return yb_bucket_config_helper(lowest_discernible_value, highest_trackable_value, sub_bucket_count_magnitude, cfg);
 }
 
 void hdr_init_preallocated(hdr_histogram* h, hdr_histogram_bucket_config* cfg)
@@ -556,6 +523,45 @@ void hdr_reset(hdr_histogram *h)
 size_t hdr_get_memory_size(hdr_histogram *h)
 {
     return sizeof(hdr_histogram) + h->counts_len * sizeof(count_t);
+}
+
+static int yb_bucket_config_helper(
+        int64_t lowest_discernible_value,
+        int64_t highest_trackable_value,
+        int sub_bucket_count_magnitude,
+        hdr_histogram_bucket_config* cfg)
+{
+
+    if (lowest_discernible_value < 1 ||
+        lowest_discernible_value * 2 > highest_trackable_value)
+    {
+        return EINVAL;
+    }
+
+    cfg->lowest_discernible_value = lowest_discernible_value;
+    cfg->highest_trackable_value = highest_trackable_value;
+    cfg->sub_bucket_half_count_magnitude = ((sub_bucket_count_magnitude > 1) ? sub_bucket_count_magnitude : 1) - 1;
+
+    double unit_magnitude = log((double)lowest_discernible_value) / log(2);
+    if (INT32_MAX < unit_magnitude)
+    {
+        return EINVAL;
+    }
+
+    cfg->unit_magnitude = (int32_t) unit_magnitude;
+    cfg->sub_bucket_count      = (int32_t) pow(2, (cfg->sub_bucket_half_count_magnitude + 1));
+    cfg->sub_bucket_half_count = cfg->sub_bucket_count / 2;
+    cfg->sub_bucket_mask       = ((int64_t) cfg->sub_bucket_count - 1) << cfg->unit_magnitude;
+
+    if (cfg->unit_magnitude + cfg->sub_bucket_half_count_magnitude > 61)
+    {
+        return EINVAL;
+    }
+
+    cfg->bucket_count = buckets_needed_to_cover_value(highest_trackable_value, cfg->sub_bucket_count, (int32_t)cfg->unit_magnitude);
+    cfg->counts_len = (cfg->bucket_count + 1) * (cfg->sub_bucket_count / 2);
+
+    return 0;
 }
 
 /* ##     ## ########  ########     ###    ######## ########  ######  */
