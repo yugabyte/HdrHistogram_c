@@ -21,11 +21,11 @@
 #define HDR_MALLOC_INCLUDE "hdr_malloc.h"
 #endif
 
+/* when using for YB purposes, we set subbucket size manually rather than with sig figs value */
 #define YB_SIG_FIGS 1
 
 #include HDR_MALLOC_INCLUDE
 
-typedef struct hdr_histogram hdr_histogram;
 typedef struct hdr_histogram_bucket_config hdr_histogram_bucket_config;
 
 /*  ######   #######  ##     ## ##    ## ########  ######  */
@@ -73,7 +73,8 @@ static void counts_inc_normalised(
     hdr_histogram* h, int32_t index, int64_t value)
 {
     int32_t normalised_index = normalize_index(h, index);
-    h->counts[normalised_index] += value;
+    if (h->counts[normalised_index] < UINT32_MAX)
+        h->counts[normalised_index] += value;
     h->total_count += value;
 }
 
@@ -412,10 +413,16 @@ int yb_hdr_calculate_bucket_config(
 {
     int32_t sub_bucket_count_magnitude;
 
-    // YB change: hardcoded sig figs to 1 for memory performance, controlling bucket sizes with yb_bucket_factor
+    /*
+     * YB change: hardcoded sig figs to 1 for memory performance, controlling bucket sizes with 
+     * yb_bucket_factor
+     */
     cfg->significant_figures = YB_SIG_FIGS;
 
-    // YB change: override subbucket count magnitude to set subbuckets per bucket equal to yb_bucket_factor variable
+    /*
+     * YB change: override subbucket count magnitude to set subbuckets per bucket equal to
+     * yb_bucket_factor variable
+     */
     typedef enum {EIGHT = 8, SIXTEEN = 16, THIRTY_TWO = 32} valid_bucket_factor;
     valid_bucket_factor bf = (valid_bucket_factor) yb_bucket_factor;
     switch(bf)
@@ -454,7 +461,6 @@ void hdr_init_preallocated(hdr_histogram* h, hdr_histogram_bucket_config* cfg)
     h->total_count                     = 0;
 }
 
-#ifdef FLEXIBLE_COUNTS_ARRAY
 int yb_hdr_init(
         int64_t lowest_discernible_value,
         int64_t highest_trackable_value,
@@ -479,8 +485,6 @@ int yb_hdr_init(
     return 0;
 }
 
-#endif
-
 int hdr_init(
         int64_t lowest_discernible_value,
         int64_t highest_trackable_value,
@@ -497,11 +501,10 @@ int hdr_init(
         return r;
     }
 
-    #ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef FLEXIBLE_COUNTS_ARRAY
     histogram = (hdr_histogram*) hdr_calloc(1, sizeof(hdr_histogram) + cfg.counts_len * sizeof(count_t));
-    #else
-    count_t* counts;
-    counts = (count_t*) hdr_calloc((size_t) cfg.counts_len, sizeof(count_t));
+#else
+    count_t* counts = (count_t*) hdr_calloc((size_t) cfg.counts_len, sizeof(count_t));
     if (!counts)
     {
         return ENOMEM;
@@ -515,7 +518,7 @@ int hdr_init(
     }
 
     histogram->counts = counts;
-    #endif
+#endif
 
     hdr_init_preallocated(histogram, &cfg);
     *result = histogram;
@@ -527,12 +530,12 @@ void hdr_close(hdr_histogram* h)
 {
     if (h)
     {
-        #ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef FLEXIBLE_COUNTS_ARRAY
         hdr_free(h);
-        #else
+#else
         hdr_free(h->counts);
         hdr_free(h);
-        #endif
+#endif
     }
 }
 

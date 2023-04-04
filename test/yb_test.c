@@ -1,5 +1,4 @@
-/**
- * yb_test.c
+/*
  * Copyright (c) YugaByte, Inc.
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -10,16 +9,16 @@
  * under the License.
  */
 
-#include <stdint.h>
-#include <stdbool.h>
-#include <stdio.h>
 #include <math.h>
-#include <time.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <string.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <hdr/hdr_histogram.h>
@@ -33,8 +32,8 @@
 #endif
 
 int tests_run = 0;
-int yb_default_max = 16777215;
-int yb_default_bucket_factor = 16;
+static const int YB_DEFAULT_MAX = 16777215;
+static const int YB_DEFAULT_BUCKET_FACTOR = 16;
 
 static int get_subbucket_width(hdr_histogram* h, int value)
 {
@@ -52,9 +51,32 @@ static char* print_subbuckets(hdr_histogram* h)
     hdr_iter_init(&iter, h);
     while(hdr_iter_next(&iter))
     {
-        printf("index: %d, [%lld-%lld), count: %"COUNT_PRINT_FORMAT" \n",iter.counts_index, iter.value_iterated_to,
-            iter.highest_equivalent_value + 1, iter.count);
+        printf("index: %d, [%lld-%lld), count: %"COUNT_PRINT_FORMAT" \n", iter.counts_index,
+            iter.value_iterated_to, iter.highest_equivalent_value + 1, iter.count);
     }
+    return 0;
+}
+
+static int yb_hdr_init_self_allocate(int64_t lowest_discernible_value,
+    int64_t highest_trackable_value, int yb_bucket_factor, hdr_histogram** h)
+{
+    struct hdr_histogram_bucket_config cfg;
+    hdr_histogram* histogram;
+
+    int r = yb_hdr_calculate_bucket_config(lowest_discernible_value,
+        highest_trackable_value, yb_bucket_factor, &cfg);
+    if (r)
+    {
+        return r;
+    }
+
+    histogram = (hdr_histogram*) calloc(1, sizeof(hdr_histogram) +
+        cfg.counts_len * sizeof(count_t));
+
+    yb_hdr_init(lowest_discernible_value,
+        highest_trackable_value, yb_bucket_factor, histogram);
+    *h = histogram;
+
     return 0;
 }
 
@@ -67,22 +89,23 @@ static char* yb_test_create(void)
      * counts array not allocated here, would need calloc(sizeof(hdr_histogram) + 176 * 
      * sizeof(count_t)) for full allocation
      */
-    #ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef FLEXIBLE_COUNTS_ARRAY
     hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
-    int r = yb_hdr_init(1, yb_default_max, yb_default_bucket_factor, h);
-    #else
+    int r = yb_hdr_init(1, YB_DEFAULT_MAX, YB_DEFAULT_BUCKET_FACTOR, h);
+#else
     hdr_histogram* h;
-    int r = hdr_init(1, yb_default_max, 1, &h);
-    #endif
+    int r = hdr_init(1, YB_DEFAULT_MAX, 1, &h);
+#endif
 
     mu_assert("Failed to allocate hdr_histogram", r == 0);
     mu_assert("Failed to allocate hdr_histogram", h != NULL);
 
-    #ifdef FLEXIBLE_COUNTS_ARRAY
-    mu_assert("Incorrect counts array length", compare_int64(h->counts_len, 176));
-    #else
-    mu_assert("Incorrect counts array length", compare_int64(h->counts_len, 336));
-    #endif
+#ifdef FLEXIBLE_COUNTS_ARRAY
+    int expected_counts_len = 176;
+#else
+    int expected_counts_len = 336;
+#endif
+    mu_assert("Incorrect counts array length", compare_int64(h->counts_len, expected_counts_len));
 
     hdr_close(h);
 
@@ -94,17 +117,12 @@ static char* yb_test_create(void)
  */
 static char* yb_test_create_with_large_values(void)
 {
-    #ifdef FLEXIBLE_COUNTS_ARRAY
-    hdr_histogram* dummy = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
-    yb_hdr_init(20000000, 100000000, 32, dummy);
-    hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram) + 
-        dummy->counts_len * sizeof(count_t));
-    hdr_close(dummy);
-    int r = yb_hdr_init(20000000, 100000000, 32, h);
-    #else
     hdr_histogram* h;
+#ifdef FLEXIBLE_COUNTS_ARRAY
+    int r = yb_hdr_init_self_allocate(20000000, 100000000, 32, &h);
+#else
     int r = hdr_init(20000000, 100000000, 1, &h);
-    #endif
+#endif
 
     mu_assert("Didn't create", r == 0);
 
@@ -138,19 +156,19 @@ static char* yb_test_create_with_large_values(void)
  */
 static char* yb_test_invalid_bucket_factor(void)
 {
-    #ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef FLEXIBLE_COUNTS_ARRAY
     hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
-    int r = yb_hdr_init(1, yb_default_max, -1, h);
-    #else
+    int r = yb_hdr_init(1, YB_DEFAULT_MAX, -1, h);
+#else
     hdr_histogram* h = NULL;
-    int r = hdr_alloc(yb_default_max, -1, &h);
-    #endif
+    int r = hdr_alloc(YB_DEFAULT_MAX, -1, &h);
+#endif
 
     mu_assert("Result was not EINVAL", r == EINVAL);
 
-    #ifndef FLEXIBLE_COUNTS_ARRAY
+#ifndef FLEXIBLE_COUNTS_ARRAY
     mu_assert("Histogram was not null", h == 0);
-    #endif
+#endif
 
     hdr_close(h);
 
@@ -162,23 +180,19 @@ static char* yb_test_invalid_bucket_factor(void)
  * we are interested in yb default config only so we skip the body when
  * FLEXIBLE_COUNTS_ARRAY is not set up - that would be a 32 sub_bucket_count histogram
  */
-static char* yb_insert_test(void)
+static char* yb_test_insert(void)
 {
-    #if defined(FLEXIBLE_COUNTS_ARRAY) && defined(USE_SHORT_COUNT_TYPE)
+#if defined(FLEXIBLE_COUNTS_ARRAY) && defined(USE_SHORT_COUNT_TYPE)
 
-    hdr_histogram* dummy = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
-    yb_hdr_init(1, yb_default_max, yb_default_bucket_factor, dummy);
-    hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram) + 
-        dummy->counts_len * sizeof(count_t));
-    hdr_close(dummy);
-    int r = yb_hdr_init(1, yb_default_max, yb_default_bucket_factor, h);
+    hdr_histogram* h;
+    int r = yb_hdr_init_self_allocate(1, YB_DEFAULT_MAX, YB_DEFAULT_BUCKET_FACTOR, &h);
 
     mu_assert("Didn't create", r == 0);
 
     mu_assert("Incorrect hdr_histogram struct size", compare_int64(sizeof(hdr_histogram), 96));
     mu_assert("Incorrect hdr_histogram total size", compare_int64(hdr_get_memory_size(h), 800));
     mu_assert("Incorrect subbucket count", compare_int64(h->sub_bucket_count,
-        yb_default_bucket_factor));
+        YB_DEFAULT_BUCKET_FACTOR));
     mu_assert("Incorrect bucket count", compare_int64(h->bucket_count, 21));
 
     /* 
@@ -206,8 +220,8 @@ static char* yb_insert_test(void)
     /* 
      * max value and beyond max, check that 16777216 is not recorded but 16777215 is
      */
-    hdr_record_value(h, yb_default_max);
-    hdr_record_value(h, yb_default_max + 1);
+    hdr_record_value(h, YB_DEFAULT_MAX);
+    hdr_record_value(h, YB_DEFAULT_MAX + 1);
 
     mu_assert("Incorrect first bucket value", compare_int64(h->counts[1], 1));
     mu_assert("Incorrect first bucket value", compare_int64(h->counts[5], 1));
@@ -221,20 +235,22 @@ static char* yb_insert_test(void)
 
     mu_assert("Incorrect subbucket width", compare_int64(get_subbucket_width(h, 123), 8));
 
-    int final_subbucket_beg = yb_default_max + 1 - get_subbucket_width(h, yb_default_max);
+    int final_subbucket_beg = YB_DEFAULT_MAX + 1 - get_subbucket_width(h, YB_DEFAULT_MAX);
 
     mu_assert("Incorrect final subbucket beginning", compare_int64(
-        lowest_equivalent_value(h, yb_default_max), final_subbucket_beg));
+        lowest_equivalent_value(h, YB_DEFAULT_MAX), final_subbucket_beg));
     mu_assert("Incorrect final subbucket end", compare_int64(
-        highest_equivalent_value(h, yb_default_max), yb_default_max));
+        highest_equivalent_value(h, YB_DEFAULT_MAX), YB_DEFAULT_MAX));
 
     mu_assert("Incorrect p50 value", compare_values(hdr_value_at_percentile(h, 50), 17, 0.001));
-    mu_assert("Incorrect p90 value", compare_values(hdr_value_at_percentile(h, 90), 9437183, 0.001));
-    mu_assert("Incorrect p99 value", compare_values(hdr_value_at_percentile(h, 99), yb_default_max, 0.001));
+    mu_assert("Incorrect p90 value", compare_values(hdr_value_at_percentile(h, 90),
+        9437183, 0.001));
+    mu_assert("Incorrect p99 value", compare_values(hdr_value_at_percentile(h, 99),
+        YB_DEFAULT_MAX, 0.001));
 
     hdr_close(h);
 
-    #endif
+#endif
 
     return 0;
 }
@@ -245,23 +261,19 @@ static char* yb_insert_test(void)
  * we are interested in yb default config only so we skip the body when
  * FLEXIBLE_COUNTS_ARRAY is not set up - that would be a 32 sub_bucket_count histogram
  */
-static char* yb_derived_max_test(void)
+static char* yb_test_derived_max(void)
 {
-    #if defined(FLEXIBLE_COUNTS_ARRAY) && defined(USE_SHORT_COUNT_TYPE)
+#if defined(FLEXIBLE_COUNTS_ARRAY) && defined(USE_SHORT_COUNT_TYPE)
 
-    int test_max = 30000;
-    hdr_histogram* dummy = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
-    yb_hdr_init(1, test_max, yb_default_bucket_factor, dummy);
-    hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram) + 
-        dummy->counts_len * sizeof(count_t));
-    hdr_close(dummy);
-    int r = yb_hdr_init(1, test_max, yb_default_bucket_factor, h);
+    const int test_max = 30000;
+    hdr_histogram* h;
+    int r = yb_hdr_init_self_allocate(1, test_max, YB_DEFAULT_BUCKET_FACTOR, &h);
 
     mu_assert("Didn't create", r == 0);
 
     mu_assert("Incorrect hdr_histogram total size", compare_int64(hdr_get_memory_size(h), 512));
     mu_assert("Incorrect subbucket count", compare_int64(h->sub_bucket_count,
-        yb_default_bucket_factor));
+        YB_DEFAULT_BUCKET_FACTOR));
     mu_assert("Incorrect bucket count", compare_int64(h->bucket_count, 12));
     mu_assert("Incorrect counts len", compare_int64(h->counts_len, 104));
     mu_assert("Incorrect subbucket width", compare_int64(get_subbucket_width(h, 6000), 512));
@@ -296,7 +308,7 @@ static char* yb_derived_max_test(void)
 
     hdr_close(h);
 
-    #endif
+#endif
 
     return 0;
 }
@@ -306,8 +318,8 @@ static struct mu_result all_tests(void)
     mu_run_test(yb_test_create);
     mu_run_test(yb_test_create_with_large_values);
     mu_run_test(yb_test_invalid_bucket_factor);
-    mu_run_test(yb_insert_test);
-    mu_run_test(yb_derived_max_test);
+    mu_run_test(yb_test_insert);
+    mu_run_test(yb_test_derived_max);
     mu_ok;
 }
 
@@ -330,7 +342,7 @@ static int hdr_histogram_run_tests(void)
 }
 
 int main()
-{ 
+{
     return hdr_histogram_run_tests();
 }
 

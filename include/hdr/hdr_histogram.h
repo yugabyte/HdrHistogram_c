@@ -18,7 +18,7 @@
 #define FLEXIBLE_COUNTS_ARRAY 1
 
 #ifdef USE_SHORT_COUNT_TYPE
-typedef int32_t count_t;
+typedef uint32_t count_t;
 #define COUNT_PRINT_FORMAT PRId32
 #else
 typedef int64_t count_t;
@@ -52,11 +52,11 @@ typedef struct hdr_histogram
     int32_t counts_len;
     int64_t total_count;
 
-    #ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef FLEXIBLE_COUNTS_ARRAY
     count_t counts[]; /* flexible array member, must be at end */
-    #else
+#else
     count_t* counts;
-    #endif
+#endif
 } hdr_histogram;
 
 #ifdef __cplusplus
@@ -98,14 +98,12 @@ int hdr_init(
  * @return 0 on success, EINVAL if lowest_discernible_value is < 1 or the
  * yb_bucket_factor value is outside of the allowed range, ENOMEM if histogram allocation failed.
  */
-#ifdef FLEXIBLE_COUNTS_ARRAY
 int yb_hdr_init(
     int64_t lowest_discernible_value,
     int64_t highest_trackable_value,
     int yb_bucket_factor,
     struct hdr_histogram* histogram);
 
-#endif
 /**
  * Free the memory and close the hdr_histogram.
  *
