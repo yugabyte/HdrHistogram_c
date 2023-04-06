@@ -4,16 +4,18 @@
  * as explained at http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-#include <stdlib.h>
-#include <stdbool.h>
-#include <math.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdint.h>
+#include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <math.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-#include <hdr/hdr_histogram.h>
+#include "hdr/hdr_histogram.h"
 #include "hdr_tests.h"
 #include "hdr_atomic.h"
 
@@ -21,7 +23,10 @@
 #define HDR_MALLOC_INCLUDE "hdr_malloc.h"
 #endif
 
-/* when using for YB purposes, we set subbucket size manually rather than with sig figs value */
+/*
+ * When using for YB purposes, we set subbucket size manually rather than with sig figs value.
+ * NOTE: If larger histogram sizes in YB become acceptable, make sig_figs a parameter again.
+ */
 #define YB_SIG_FIGS 1
 
 #include HDR_MALLOC_INCLUDE
@@ -434,8 +439,15 @@ int yb_hdr_init(
         int yb_bucket_factor,
         hdr_histogram* histogram)
 {
-    hdr_histogram_bucket_config cfg;
+    /*
+     * This function should only work for hdr_histograms with flexible counts array.
+     */
+#ifndef YB_FLEXIBLE_COUNTS_ARRAY
+    return ENOMEM;
+#endif
 
+    hdr_histogram_bucket_config cfg;
+    assert(offsetof(hdr_histogram, counts) == sizeof(hdr_histogram));
     int r = yb_hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, yb_bucket_factor, &cfg);
     if (r)
     {
@@ -468,7 +480,8 @@ int hdr_init(
         return r;
     }
 
-#ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef YB_FLEXIBLE_COUNTS_ARRAY
+    assert(offsetof(hdr_histogram, counts) == sizeof(hdr_histogram));
     histogram = (hdr_histogram*) hdr_calloc(1, sizeof(hdr_histogram) + cfg.counts_len * sizeof(count_t));
 #else
     count_t* counts = (count_t*) hdr_calloc((size_t) cfg.counts_len, sizeof(count_t));
@@ -497,7 +510,7 @@ void hdr_close(hdr_histogram* h)
 {
     if (h)
     {
-#ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef YB_FLEXIBLE_COUNTS_ARRAY
         hdr_free(h);
 #else
         hdr_free(h->counts);

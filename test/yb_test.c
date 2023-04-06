@@ -21,8 +21,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <hdr/hdr_histogram.h>
-#include <hdr/hdr_histogram_log.h>
+#include "hdr/hdr_histogram.h"
+#include "hdr/hdr_histogram_log.h"
 
 #include "minunit.h"
 
@@ -35,16 +35,26 @@ int tests_run = 0;
 static const int YB_DEFAULT_MAX = 16777215;
 static const int YB_DEFAULT_BUCKET_FACTOR = 16;
 
+/*
+ * For a given value, determines the histogram subbucket that captures this value and
+ * returns the width of that subbucket.
+ */
 static int get_subbucket_width(hdr_histogram* h, int value)
 {
     return hdr_next_non_equivalent_value(h, value) - lowest_equivalent_value(h, value);
 }
 
+/*
+ * Checks that the difference between a and b is at most b * variation.
+ */
 static bool compare_values(double a, double b, double variation)
 {
     return compare_double(a, b, b * variation);
 }
 
+/*
+ * Not used for tests, but useful when printing diagnostics is desired.
+ */
 static char* print_subbuckets(hdr_histogram* h)
 {
     struct hdr_iter iter;
@@ -89,7 +99,7 @@ static char* yb_test_create(void)
      * counts array not allocated here, would need calloc(sizeof(hdr_histogram) + 176 * 
      * sizeof(count_t)) for full allocation
      */
-#ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef YB_FLEXIBLE_COUNTS_ARRAY
     hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
     int r = yb_hdr_init(1, YB_DEFAULT_MAX, YB_DEFAULT_BUCKET_FACTOR, h);
 #else
@@ -100,7 +110,7 @@ static char* yb_test_create(void)
     mu_assert("Failed to allocate hdr_histogram", r == 0);
     mu_assert("Failed to allocate hdr_histogram", h != NULL);
 
-#ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef YB_FLEXIBLE_COUNTS_ARRAY
     int expected_counts_len = 176;
 #else
     int expected_counts_len = 336;
@@ -118,7 +128,7 @@ static char* yb_test_create(void)
 static char* yb_test_create_with_large_values(void)
 {
     hdr_histogram* h;
-#ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef YB_FLEXIBLE_COUNTS_ARRAY
     int r = yb_hdr_init_self_allocate(20000000, 100000000, 32, &h);
 #else
     int r = hdr_init(20000000, 100000000, 1, &h);
@@ -156,7 +166,7 @@ static char* yb_test_create_with_large_values(void)
  */
 static char* yb_test_invalid_bucket_factor(void)
 {
-#ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef YB_FLEXIBLE_COUNTS_ARRAY
     hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
     int r = yb_hdr_init(1, YB_DEFAULT_MAX, -1, h);
 #else
@@ -166,7 +176,7 @@ static char* yb_test_invalid_bucket_factor(void)
 
     mu_assert("Result was not EINVAL", r == EINVAL);
 
-#ifndef FLEXIBLE_COUNTS_ARRAY
+#ifndef YB_FLEXIBLE_COUNTS_ARRAY
     mu_assert("Histogram was not null", h == 0);
 #endif
 
@@ -177,12 +187,12 @@ static char* yb_test_invalid_bucket_factor(void)
 
 /* 
  * confirm inserts are recorded in the expected subbuckets
- * we are interested in yb default config only so we skip the body when
- * FLEXIBLE_COUNTS_ARRAY is not set up - that would be a 32 sub_bucket_count histogram
+ * We are interested in yb default config only so we skip the body when
+ * YB_FLEXIBLE_COUNTS_ARRAY is not set up - that would be a 32 sub_bucket_count histogram
  */
 static char* yb_test_insert(void)
 {
-#if defined(FLEXIBLE_COUNTS_ARRAY) && defined(USE_SHORT_COUNT_TYPE)
+#if defined(YB_FLEXIBLE_COUNTS_ARRAY) && defined(YB_USE_SHORT_COUNT_TYPE)
 
     hdr_histogram* h;
     int r = yb_hdr_init_self_allocate(1, YB_DEFAULT_MAX, YB_DEFAULT_BUCKET_FACTOR, &h);
@@ -259,11 +269,11 @@ static char* yb_test_insert(void)
  * confirm we can calculate the actual histogram maximum for an arbitrary histogram max input 
  * like 30000, using only subbucket size and bucket count
  * we are interested in yb default config only so we skip the body when
- * FLEXIBLE_COUNTS_ARRAY is not set up - that would be a 32 sub_bucket_count histogram
+ * YB_FLEXIBLE_COUNTS_ARRAY is not set up - that would be a 32 sub_bucket_count histogram
  */
 static char* yb_test_derived_max(void)
 {
-#if defined(FLEXIBLE_COUNTS_ARRAY) && defined(USE_SHORT_COUNT_TYPE)
+#if defined(YB_FLEXIBLE_COUNTS_ARRAY) && defined(YB_USE_SHORT_COUNT_TYPE)
 
     const int test_max = 30000;
     hdr_histogram* h;

@@ -14,10 +14,10 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#define USE_SHORT_COUNT_TYPE 1
-#define FLEXIBLE_COUNTS_ARRAY 1
+#define YB_USE_SHORT_COUNT_TYPE 1
+#define YB_FLEXIBLE_COUNTS_ARRAY 1
 
-#ifdef USE_SHORT_COUNT_TYPE
+#ifdef YB_USE_SHORT_COUNT_TYPE
 typedef uint32_t count_t;
 #define COUNT_PRINT_FORMAT PRId32
 #else
@@ -52,7 +52,7 @@ typedef struct hdr_histogram
     int32_t counts_len;
     int64_t total_count;
 
-#ifdef FLEXIBLE_COUNTS_ARRAY
+#ifdef YB_FLEXIBLE_COUNTS_ARRAY
     count_t counts[]; /* flexible array member, must be at end */
 #else
     count_t* counts;
@@ -69,7 +69,7 @@ extern "C" {
  * @param lowest_discernible_value The smallest possible value that is distinguishable from 0.
  * Must be a positive integer that is >= 1. May be internally rounded down to nearest power of 2.
  * @param highest_trackable_value The largest possible value to be put into the
- * histogram.
+ * histogram. hdr_record_value() will discard values exceeding this max.
  * @param significant_figures The level of precision for this histogram, i.e. the number
  * of figures in a decimal number that will be maintained.  E.g. a value of 3 will mean
  * the results from the histogram will be accurate up to the first three digits.  Must
