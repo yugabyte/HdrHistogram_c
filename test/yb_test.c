@@ -95,10 +95,10 @@ static int yb_hdr_init_self_allocate(int64_t lowest_discernible_value,
  */
 static char* yb_test_create(void)
 {
-    /* 
-     * counts array not allocated here, would need calloc(sizeof(hdr_histogram) + 176 * 
-     * sizeof(count_t)) for full allocation
-     */
+/*
+ * counts array not allocated here, would need calloc(sizeof(hdr_histogram) + 176 *
+ * sizeof(count_t)) for full allocation
+ */
 #ifdef YB_FLEXIBLE_COUNTS_ARRAY
     hdr_histogram* h = (hdr_histogram*) calloc(1, sizeof(hdr_histogram));
     int r = yb_hdr_init(1, YB_DEFAULT_MAX, YB_DEFAULT_BUCKET_FACTOR, h);

@@ -439,9 +439,9 @@ int yb_hdr_init(
         int yb_bucket_factor,
         hdr_histogram* histogram)
 {
-    /*
-     * This function should only work for hdr_histograms with flexible counts array.
-     */
+/*
+ * This function should only work for hdr_histograms with flexible counts array.
+ */
 #ifndef YB_FLEXIBLE_COUNTS_ARRAY
     return ENOMEM;
 #endif
@@ -470,7 +470,6 @@ int hdr_init(
         int significant_figures,
         hdr_histogram** result)
 {
-
     hdr_histogram_bucket_config cfg;
     hdr_histogram* histogram;
 
@@ -510,12 +509,10 @@ void hdr_close(hdr_histogram* h)
 {
     if (h)
     {
-#ifdef YB_FLEXIBLE_COUNTS_ARRAY
-        hdr_free(h);
-#else
+#ifndef YB_FLEXIBLE_COUNTS_ARRAY
         hdr_free(h->counts);
-        hdr_free(h);
 #endif
+        hdr_free(h);
     }
 }
 
