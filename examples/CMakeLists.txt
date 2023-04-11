@@ -1,3 +1,4 @@
+project(hdr_histogram)
 if (HDR_LOG_ENABLED)
     add_executable(hdr_decoder
         hdr_decoder.c)

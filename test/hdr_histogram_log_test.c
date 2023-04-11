@@ -147,7 +147,7 @@ static bool compare_histogram(struct hdr_histogram* a, struct hdr_histogram* b)
             iter_a.value != iter_b.value)
         {
             printf(
-                "A - value: %"PRIu64", count: %"PRIu64", B - value: %"PRIu64", count: %"PRIu64"\n",
+                "A - value: %"PRIu64", count: %"COUNT_PRINT_FORMAT", B - value: %"PRIu64", count: %"COUNT_PRINT_FORMAT"\n",
                 iter_a.value, iter_a.count,
                 iter_b.value, iter_b.count);
         }

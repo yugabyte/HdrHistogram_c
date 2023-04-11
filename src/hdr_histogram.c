@@ -4,16 +4,18 @@
  * as explained at http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-#include <stdlib.h>
-#include <stdbool.h>
-#include <math.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdint.h>
+#include <assert.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <math.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <string.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
-#include <hdr/hdr_histogram.h>
+#include "hdr/hdr_histogram.h"
 #include "hdr_tests.h"
 #include "hdr_atomic.h"
 
@@ -21,7 +23,21 @@
 #define HDR_MALLOC_INCLUDE "hdr_malloc.h"
 #endif
 
+/*
+ * When using for YB purposes, we set subbucket size manually rather than with sig figs value.
+ * NOTE: If larger histogram sizes in YB become acceptable, make sig_figs a parameter again.
+ */
+#define YB_SIG_FIGS 1
+
 #include HDR_MALLOC_INCLUDE
+
+typedef struct hdr_histogram_bucket_config hdr_histogram_bucket_config;
+
+static int yb_bucket_config_helper(
+        int64_t lowest_discernible_value,
+        int64_t highest_trackable_value,
+        int sub_bucket_count_magnitude,
+        hdr_histogram_bucket_config* cfg);
 
 /*  ######   #######  ##     ## ##    ## ########  ######  */
 /* ##    ## ##     ## ##     ## ###   ##    ##    ##    ## */
@@ -31,7 +47,7 @@
 /* ##    ## ##     ## ##     ## ##   ###    ##    ##    ## */
 /*  ######   #######   #######  ##    ##    ##     ######  */
 
-static int32_t normalize_index(const struct hdr_histogram* h, int32_t index)
+static int32_t normalize_index(const hdr_histogram* h, int32_t index)
 {
     int32_t normalized_index;
     int32_t adjustment = 0;
@@ -54,26 +70,27 @@ static int32_t normalize_index(const struct hdr_histogram* h, int32_t index)
     return normalized_index + adjustment;
 }
 
-static int64_t counts_get_direct(const struct hdr_histogram* h, int32_t index)
+static count_t counts_get_direct(const hdr_histogram* h, int32_t index)
 {
     return h->counts[index];
 }
 
-static int64_t counts_get_normalised(const struct hdr_histogram* h, int32_t index)
+static count_t counts_get_normalised(const hdr_histogram* h, int32_t index)
 {
     return counts_get_direct(h, normalize_index(h, index));
 }
 
 static void counts_inc_normalised(
-    struct hdr_histogram* h, int32_t index, int64_t value)
+    hdr_histogram* h, int32_t index, int64_t value)
 {
     int32_t normalised_index = normalize_index(h, index);
-    h->counts[normalised_index] += value;
+    if (h->counts[normalised_index] < UINT32_MAX)
+        h->counts[normalised_index] += value;
     h->total_count += value;
 }
 
 static void counts_inc_normalised_atomic(
-    struct hdr_histogram* h, int32_t index, int64_t value)
+    hdr_histogram* h, int32_t index, int64_t value)
 {
     int32_t normalised_index = normalize_index(h, index);
 
@@ -81,13 +98,13 @@ static void counts_inc_normalised_atomic(
     hdr_atomic_add_fetch_64(&h->total_count, value);
 }
 
-static void update_min_max(struct hdr_histogram* h, int64_t value)
+static void update_min_max(hdr_histogram* h, int64_t value)
 {
     h->min_value = (value < h->min_value && value != 0) ? value : h->min_value;
     h->max_value = (value > h->max_value) ? value : h->max_value;
 }
 
-static void update_min_max_atomic(struct hdr_histogram* h, int64_t value)
+static void update_min_max_atomic(hdr_histogram* h, int64_t value)
 {
     int64_t current_min_value;
     int64_t current_max_value;
@@ -165,7 +182,7 @@ static int32_t count_leading_zeros_64(int64_t value)
 #endif
 }
 
-static int32_t get_bucket_index(const struct hdr_histogram* h, int64_t value)
+static int32_t get_bucket_index(const hdr_histogram* h, int64_t value)
 {
     int32_t pow2ceiling = 64 - count_leading_zeros_64(value | h->sub_bucket_mask); /* smallest power of 2 containing value */
     return pow2ceiling - h->unit_magnitude - (h->sub_bucket_half_count_magnitude + 1);
@@ -176,7 +193,7 @@ static int32_t get_sub_bucket_index(int64_t value, int32_t bucket_index, int32_t
     return (int32_t)(value >> (bucket_index + unit_magnitude));
 }
 
-static int32_t counts_index(const struct hdr_histogram* h, int32_t bucket_index, int32_t sub_bucket_index)
+static int32_t counts_index(const hdr_histogram* h, int32_t bucket_index, int32_t sub_bucket_index)
 {
     /* Calculate the index for the first entry in the bucket: */
     /* (The following is the equivalent of ((bucket_index + 1) * subBucketHalfCount) ): */
@@ -192,7 +209,7 @@ static int64_t value_from_index(int32_t bucket_index, int32_t sub_bucket_index, 
     return ((int64_t) sub_bucket_index) << (bucket_index + unit_magnitude);
 }
 
-int32_t counts_index_for(const struct hdr_histogram* h, int64_t value)
+int32_t counts_index_for(const hdr_histogram* h, int64_t value)
 {
     int32_t bucket_index     = get_bucket_index(h, value);
     int32_t sub_bucket_index = get_sub_bucket_index(value, bucket_index, h->unit_magnitude);
@@ -200,7 +217,7 @@ int32_t counts_index_for(const struct hdr_histogram* h, int64_t value)
     return counts_index(h, bucket_index, sub_bucket_index);
 }
 
-int64_t hdr_value_at_index(const struct hdr_histogram *h, int32_t index)
+int64_t hdr_value_at_index(const hdr_histogram *h, int32_t index)
 {
     int32_t bucket_index = (index >> h->sub_bucket_half_count_magnitude) - 1;
     int32_t sub_bucket_index = (index & (h->sub_bucket_half_count - 1)) + h->sub_bucket_half_count;
@@ -214,7 +231,7 @@ int64_t hdr_value_at_index(const struct hdr_histogram *h, int32_t index)
     return value_from_index(bucket_index, sub_bucket_index, h->unit_magnitude);
 }
 
-int64_t hdr_size_of_equivalent_value_range(const struct hdr_histogram* h, int64_t value)
+int64_t hdr_size_of_equivalent_value_range(const hdr_histogram* h, int64_t value)
 {
     int32_t bucket_index     = get_bucket_index(h, value);
     int32_t sub_bucket_index = get_sub_bucket_index(value, bucket_index, h->unit_magnitude);
@@ -223,7 +240,7 @@ int64_t hdr_size_of_equivalent_value_range(const struct hdr_histogram* h, int64_
 }
 
 static int64_t size_of_equivalent_value_range_given_bucket_indices(
-    const struct hdr_histogram *h,
+    const hdr_histogram *h,
     int32_t bucket_index,
     int32_t sub_bucket_index)
 {
@@ -231,7 +248,7 @@ static int64_t size_of_equivalent_value_range_given_bucket_indices(
     return INT64_C(1) << (h->unit_magnitude + adjusted_bucket);
 }
 
-static int64_t lowest_equivalent_value(const struct hdr_histogram* h, int64_t value)
+int64_t lowest_equivalent_value(const hdr_histogram* h, int64_t value)
 {
     int32_t bucket_index     = get_bucket_index(h, value);
     int32_t sub_bucket_index = get_sub_bucket_index(value, bucket_index, h->unit_magnitude);
@@ -239,29 +256,29 @@ static int64_t lowest_equivalent_value(const struct hdr_histogram* h, int64_t va
 }
 
 static int64_t lowest_equivalent_value_given_bucket_indices(
-    const struct hdr_histogram *h,
+    const hdr_histogram *h,
     int32_t bucket_index,
     int32_t sub_bucket_index)
 {
     return value_from_index(bucket_index, sub_bucket_index, h->unit_magnitude);
 }
 
-int64_t hdr_next_non_equivalent_value(const struct hdr_histogram *h, int64_t value)
+int64_t hdr_next_non_equivalent_value(const hdr_histogram *h, int64_t value)
 {
     return lowest_equivalent_value(h, value) + hdr_size_of_equivalent_value_range(h, value);
 }
 
-static int64_t highest_equivalent_value(const struct hdr_histogram* h, int64_t value)
+int64_t highest_equivalent_value(const hdr_histogram* h, int64_t value)
 {
     return hdr_next_non_equivalent_value(h, value) - 1;
 }
 
-int64_t hdr_median_equivalent_value(const struct hdr_histogram *h, int64_t value)
+int64_t hdr_median_equivalent_value(const hdr_histogram *h, int64_t value)
 {
     return lowest_equivalent_value(h, value) + (hdr_size_of_equivalent_value_range(h, value) >> 1);
 }
 
-static int64_t non_zero_min(const struct hdr_histogram* h)
+static int64_t non_zero_min(const hdr_histogram* h)
 {
     if (INT64_MAX == h->min_value)
     {
@@ -271,16 +288,16 @@ static int64_t non_zero_min(const struct hdr_histogram* h)
     return lowest_equivalent_value(h, h->min_value);
 }
 
-void hdr_reset_internal_counters(struct hdr_histogram* h)
+void hdr_reset_internal_counters(hdr_histogram* h)
 {
     int min_non_zero_index = -1;
     int max_index = -1;
-    int64_t observed_total_count = 0;
+    count_t observed_total_count = 0;
     int i;
 
     for (i = 0; i < h->counts_len; i++)
     {
-        int64_t count_at_index;
+        count_t count_at_index;
 
         if ((count_at_index = counts_get_direct(h, i)) > 0)
         {
@@ -344,24 +361,195 @@ int hdr_calculate_bucket_config(
         int64_t lowest_discernible_value,
         int64_t highest_trackable_value,
         int significant_figures,
-        struct hdr_histogram_bucket_config* cfg)
+        hdr_histogram_bucket_config* cfg)
 {
+    if (significant_figures < 1 || 5 < significant_figures) 
+    {
+        return EINVAL;
+    }
+    cfg->significant_figures = significant_figures;
     int32_t sub_bucket_count_magnitude;
     int64_t largest_value_with_single_unit_resolution;
 
+    largest_value_with_single_unit_resolution = 2 * power(10, significant_figures);
+    sub_bucket_count_magnitude = (int32_t) ceil(log((double)largest_value_with_single_unit_resolution) / log(2));
+
+    return yb_bucket_config_helper(lowest_discernible_value, highest_trackable_value, sub_bucket_count_magnitude, cfg);
+}
+
+int yb_hdr_calculate_bucket_config(
+        int64_t lowest_discernible_value,
+        int64_t highest_trackable_value,
+        int yb_bucket_factor,
+        hdr_histogram_bucket_config* cfg)
+{
+    int32_t sub_bucket_count_magnitude;
+
+    /*
+     * YB change: hardcoded sig figs to 1 for memory performance, controlling bucket sizes with 
+     * yb_bucket_factor
+     */
+    cfg->significant_figures = YB_SIG_FIGS;
+
+    /*
+     * YB change: override subbucket count magnitude to set subbuckets per bucket equal to
+     * yb_bucket_factor variable
+     */
+    typedef enum {EIGHT = 8, SIXTEEN = 16, THIRTY_TWO = 32} valid_bucket_factor;
+    valid_bucket_factor bf = (valid_bucket_factor) yb_bucket_factor;
+    switch(bf)
+    {
+        case EIGHT:
+            __attribute__ ((fallthrough));
+        case SIXTEEN:
+            __attribute__ ((fallthrough));
+        case THIRTY_TWO:
+            sub_bucket_count_magnitude = log(yb_bucket_factor)/log(2);
+            break;
+        default:
+            return EINVAL;
+            break;
+    }
+
+    return yb_bucket_config_helper(lowest_discernible_value, highest_trackable_value, sub_bucket_count_magnitude, cfg);
+}
+
+void hdr_init_preallocated(hdr_histogram* h, hdr_histogram_bucket_config* cfg)
+{
+    h->lowest_discernible_value        = cfg->lowest_discernible_value;
+    h->highest_trackable_value         = cfg->highest_trackable_value;
+    h->unit_magnitude                  = (int32_t)cfg->unit_magnitude;
+    h->significant_figures             = (int32_t)cfg->significant_figures;
+    h->sub_bucket_half_count_magnitude = cfg->sub_bucket_half_count_magnitude;
+    h->sub_bucket_half_count           = cfg->sub_bucket_half_count;
+    h->sub_bucket_mask                 = cfg->sub_bucket_mask;
+    h->sub_bucket_count                = cfg->sub_bucket_count;
+    h->min_value                       = INT64_MAX;
+    h->max_value                       = 0;
+    h->normalizing_index_offset        = 0;
+    h->conversion_ratio                = 1.0;
+    h->bucket_count                    = cfg->bucket_count;
+    h->counts_len                      = cfg->counts_len;
+    h->total_count                     = 0;
+}
+
+int yb_hdr_init(
+        int64_t lowest_discernible_value,
+        int64_t highest_trackable_value,
+        int yb_bucket_factor,
+        hdr_histogram* histogram)
+{
+/*
+ * This function should only work for hdr_histograms with flexible counts array.
+ */
+#ifndef YB_FLEXIBLE_COUNTS_ARRAY
+    return ENOMEM;
+#endif
+
+    hdr_histogram_bucket_config cfg;
+    assert(offsetof(hdr_histogram, counts) == sizeof(hdr_histogram));
+    int r = yb_hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, yb_bucket_factor, &cfg);
+    if (r)
+    {
+        return r;
+    }
+
+    if (!histogram)
+    {
+        return ENOMEM;
+    }
+
+    hdr_init_preallocated(histogram, &cfg);
+
+    return 0;
+}
+
+int hdr_init(
+        int64_t lowest_discernible_value,
+        int64_t highest_trackable_value,
+        int significant_figures,
+        hdr_histogram** result)
+{
+    hdr_histogram_bucket_config cfg;
+    hdr_histogram* histogram;
+
+    int r = hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, significant_figures, &cfg);
+    if (r)
+    {
+        return r;
+    }
+
+#ifdef YB_FLEXIBLE_COUNTS_ARRAY
+    assert(offsetof(hdr_histogram, counts) == sizeof(hdr_histogram));
+    histogram = (hdr_histogram*) hdr_calloc(1, sizeof(hdr_histogram) + cfg.counts_len * sizeof(count_t));
+#else
+    count_t* counts = (count_t*) hdr_calloc((size_t) cfg.counts_len, sizeof(count_t));
+    if (!counts)
+    {
+        return ENOMEM;
+    }
+
+    histogram = (hdr_histogram*) hdr_calloc(1, sizeof(hdr_histogram));
+    if (!histogram)
+    {
+        hdr_free(counts);
+        return ENOMEM;
+    }
+
+    histogram->counts = counts;
+#endif
+
+    hdr_init_preallocated(histogram, &cfg);
+    *result = histogram;
+
+    return 0;
+}
+
+void hdr_close(hdr_histogram* h)
+{
+    if (h)
+    {
+#ifndef YB_FLEXIBLE_COUNTS_ARRAY
+        hdr_free(h->counts);
+#endif
+        hdr_free(h);
+    }
+}
+
+int hdr_alloc(int64_t highest_trackable_value, int significant_figures, hdr_histogram** result)
+{
+    return hdr_init(1, highest_trackable_value, significant_figures, result);
+}
+
+/* reset a histogram to zero. */
+void hdr_reset(hdr_histogram *h)
+{
+     h->total_count=0;
+     h->min_value = INT64_MAX;
+     h->max_value = 0;
+     memset(h->counts, 0, (sizeof(count_t) * h->counts_len));
+}
+
+size_t hdr_get_memory_size(hdr_histogram *h)
+{
+    return sizeof(hdr_histogram) + h->counts_len * sizeof(count_t);
+}
+
+static int yb_bucket_config_helper(
+        int64_t lowest_discernible_value,
+        int64_t highest_trackable_value,
+        int sub_bucket_count_magnitude,
+        hdr_histogram_bucket_config* cfg)
+{
+
     if (lowest_discernible_value < 1 ||
-            significant_figures < 1 || 5 < significant_figures ||
-            lowest_discernible_value * 2 > highest_trackable_value)
+        lowest_discernible_value * 2 > highest_trackable_value)
     {
         return EINVAL;
     }
 
     cfg->lowest_discernible_value = lowest_discernible_value;
-    cfg->significant_figures = significant_figures;
     cfg->highest_trackable_value = highest_trackable_value;
-
-    largest_value_with_single_unit_resolution = 2 * power(10, significant_figures);
-    sub_bucket_count_magnitude = (int32_t) ceil(log((double)largest_value_with_single_unit_resolution) / log(2));
     cfg->sub_bucket_half_count_magnitude = ((sub_bucket_count_magnitude > 1) ? sub_bucket_count_magnitude : 1) - 1;
 
     double unit_magnitude = log((double)lowest_discernible_value) / log(2);
@@ -386,89 +574,6 @@ int hdr_calculate_bucket_config(
     return 0;
 }
 
-void hdr_init_preallocated(struct hdr_histogram* h, struct hdr_histogram_bucket_config* cfg)
-{
-    h->lowest_discernible_value        = cfg->lowest_discernible_value;
-    h->highest_trackable_value         = cfg->highest_trackable_value;
-    h->unit_magnitude                  = (int32_t)cfg->unit_magnitude;
-    h->significant_figures             = (int32_t)cfg->significant_figures;
-    h->sub_bucket_half_count_magnitude = cfg->sub_bucket_half_count_magnitude;
-    h->sub_bucket_half_count           = cfg->sub_bucket_half_count;
-    h->sub_bucket_mask                 = cfg->sub_bucket_mask;
-    h->sub_bucket_count                = cfg->sub_bucket_count;
-    h->min_value                       = INT64_MAX;
-    h->max_value                       = 0;
-    h->normalizing_index_offset        = 0;
-    h->conversion_ratio                = 1.0;
-    h->bucket_count                    = cfg->bucket_count;
-    h->counts_len                      = cfg->counts_len;
-    h->total_count                     = 0;
-}
-
-int hdr_init(
-        int64_t lowest_discernible_value,
-        int64_t highest_trackable_value,
-        int significant_figures,
-        struct hdr_histogram** result)
-{
-    int64_t* counts;
-    struct hdr_histogram_bucket_config cfg;
-    struct hdr_histogram* histogram;
-
-    int r = hdr_calculate_bucket_config(lowest_discernible_value, highest_trackable_value, significant_figures, &cfg);
-    if (r)
-    {
-        return r;
-    }
-
-    counts = (int64_t*) hdr_calloc((size_t) cfg.counts_len, sizeof(int64_t));
-    if (!counts)
-    {
-        return ENOMEM;
-    }
-
-    histogram = (struct hdr_histogram*) hdr_calloc(1, sizeof(struct hdr_histogram));
-    if (!histogram)
-    {
-        hdr_free(counts);
-        return ENOMEM;
-    }
-
-    histogram->counts = counts;
-
-    hdr_init_preallocated(histogram, &cfg);
-    *result = histogram;
-
-    return 0;
-}
-
-void hdr_close(struct hdr_histogram* h)
-{
-    if (h) {
-	hdr_free(h->counts);
-	hdr_free(h);
-    }
-}
-
-int hdr_alloc(int64_t highest_trackable_value, int significant_figures, struct hdr_histogram** result)
-{
-    return hdr_init(1, highest_trackable_value, significant_figures, result);
-}
-
-/* reset a histogram to zero. */
-void hdr_reset(struct hdr_histogram *h)
-{
-     h->total_count=0;
-     h->min_value = INT64_MAX;
-     h->max_value = 0;
-     memset(h->counts, 0, (sizeof(int64_t) * h->counts_len));
-}
-
-size_t hdr_get_memory_size(struct hdr_histogram *h)
-{
-    return sizeof(struct hdr_histogram) + h->counts_len * sizeof(int64_t);
-}
-
 /* ##     ## ########  ########     ###    ######## ########  ######  */
 /* ##     ## ##     ## ##     ##   ## ##      ##    ##       ##    ## */
 /* ##     ## ##     ## ##     ##  ##   ##     ##    ##       ##       */
@@ -478,17 +583,17 @@ size_t hdr_get_memory_size(struct hdr_histogram *h)
 /*  #######  ##        ########  ##     ##    ##    ########  ######  */
 
 
-bool hdr_record_value(struct hdr_histogram* h, int64_t value)
+bool hdr_record_value(hdr_histogram* h, int64_t value)
 {
     return hdr_record_values(h, value, 1);
 }
 
-bool hdr_record_value_atomic(struct hdr_histogram* h, int64_t value)
+bool hdr_record_value_atomic(hdr_histogram* h, int64_t value)
 {
     return hdr_record_values_atomic(h, value, 1);
 }
 
-bool hdr_record_values(struct hdr_histogram* h, int64_t value, int64_t count)
+bool hdr_record_values(hdr_histogram* h, int64_t value, count_t count)
 {
     int32_t counts_index;
 
@@ -505,12 +610,13 @@ bool hdr_record_values(struct hdr_histogram* h, int64_t value, int64_t count)
     }
 
     counts_inc_normalised(h, counts_index, count);
+
     update_min_max(h, value);
 
     return true;
 }
 
-bool hdr_record_values_atomic(struct hdr_histogram* h, int64_t value, int64_t count)
+bool hdr_record_values_atomic(hdr_histogram* h, int64_t value, count_t count)
 {
     int32_t counts_index;
 
@@ -532,17 +638,17 @@ bool hdr_record_values_atomic(struct hdr_histogram* h, int64_t value, int64_t co
     return true;
 }
 
-bool hdr_record_corrected_value(struct hdr_histogram* h, int64_t value, int64_t expected_interval)
+bool hdr_record_corrected_value(hdr_histogram* h, int64_t value, int64_t expected_interval)
 {
     return hdr_record_corrected_values(h, value, 1, expected_interval);
 }
 
-bool hdr_record_corrected_value_atomic(struct hdr_histogram* h, int64_t value, int64_t expected_interval)
+bool hdr_record_corrected_value_atomic(hdr_histogram* h, int64_t value, int64_t expected_interval)
 {
     return hdr_record_corrected_values_atomic(h, value, 1, expected_interval);
 }
 
-bool hdr_record_corrected_values(struct hdr_histogram* h, int64_t value, int64_t count, int64_t expected_interval)
+bool hdr_record_corrected_values(hdr_histogram* h, int64_t value, count_t count, int64_t expected_interval)
 {
     int64_t missing_value;
 
@@ -568,7 +674,7 @@ bool hdr_record_corrected_values(struct hdr_histogram* h, int64_t value, int64_t
     return true;
 }
 
-bool hdr_record_corrected_values_atomic(struct hdr_histogram* h, int64_t value, int64_t count, int64_t expected_interval)
+bool hdr_record_corrected_values_atomic(hdr_histogram* h, int64_t value, count_t count, int64_t expected_interval)
 {
     int64_t missing_value;
 
@@ -594,7 +700,7 @@ bool hdr_record_corrected_values_atomic(struct hdr_histogram* h, int64_t value, 
     return true;
 }
 
-int64_t hdr_add(struct hdr_histogram* h, const struct hdr_histogram* from)
+int64_t hdr_add(hdr_histogram* h, const hdr_histogram* from)
 {
     struct hdr_iter iter;
     int64_t dropped = 0;
@@ -603,7 +709,7 @@ int64_t hdr_add(struct hdr_histogram* h, const struct hdr_histogram* from)
     while (hdr_iter_next(&iter))
     {
         int64_t value = iter.value;
-        int64_t count = iter.count;
+        count_t count = iter.count;
 
         if (!hdr_record_values(h, value, count))
         {
@@ -615,7 +721,7 @@ int64_t hdr_add(struct hdr_histogram* h, const struct hdr_histogram* from)
 }
 
 int64_t hdr_add_while_correcting_for_coordinated_omission(
-        struct hdr_histogram* h, struct hdr_histogram* from, int64_t expected_interval)
+        hdr_histogram* h, hdr_histogram* from, int64_t expected_interval)
 {
     struct hdr_iter iter;
     int64_t dropped = 0;
@@ -624,7 +730,7 @@ int64_t hdr_add_while_correcting_for_coordinated_omission(
     while (hdr_iter_next(&iter))
     {
         int64_t value = iter.value;
-        int64_t count = iter.count;
+        count_t count = iter.count;
 
         if (!hdr_record_corrected_values(h, value, count, expected_interval))
         {
@@ -646,7 +752,7 @@ int64_t hdr_add_while_correcting_for_coordinated_omission(
 /*    ###    ##     ## ########  #######  ########  ######  */
 
 
-int64_t hdr_max(const struct hdr_histogram* h)
+int64_t hdr_max(const hdr_histogram* h)
 {
     if (0 == h->max_value)
     {
@@ -656,7 +762,7 @@ int64_t hdr_max(const struct hdr_histogram* h)
     return highest_equivalent_value(h, h->max_value);
 }
 
-int64_t hdr_min(const struct hdr_histogram* h)
+int64_t hdr_min(const hdr_histogram* h)
 {
     if (0 < hdr_count_at_index(h, 0))
     {
@@ -666,9 +772,9 @@ int64_t hdr_min(const struct hdr_histogram* h)
     return non_zero_min(h);
 }
 
-static int64_t get_value_from_idx_up_to_count(const struct hdr_histogram* h, int64_t count_at_percentile)
+static int64_t get_value_from_idx_up_to_count(const hdr_histogram* h, count_t count_at_percentile)
 {
-    int64_t count_to_idx = 0;
+    count_t count_to_idx = 0;
 
     count_at_percentile = 0 < count_at_percentile ? count_at_percentile : 1;
     for (int32_t idx = 0; idx < h->counts_len; idx++)
@@ -684,11 +790,10 @@ static int64_t get_value_from_idx_up_to_count(const struct hdr_histogram* h, int
 }
 
 
-int64_t hdr_value_at_percentile(const struct hdr_histogram* h, double percentile)
+int64_t hdr_value_at_percentile(const hdr_histogram* h, double percentile)
 {
     double requested_percentile = percentile < 100.0 ? percentile : 100.0;
-    int64_t count_at_percentile =
-        (int64_t) (((requested_percentile / 100) * h->total_count) + 0.5);
+    count_t count_at_percentile = ((requested_percentile / 100) * h->total_count) + 0.5;
     int64_t value_from_idx = get_value_from_idx_up_to_count(h, count_at_percentile);
     if (percentile == 0.0)
     {
@@ -697,7 +802,7 @@ int64_t hdr_value_at_percentile(const struct hdr_histogram* h, double percentile
     return highest_equivalent_value(h, value_from_idx);
 }
 
-int hdr_value_at_percentiles(const struct hdr_histogram *h, const double *percentiles, int64_t *values, size_t length)
+int hdr_value_at_percentiles(const hdr_histogram *h, const double *percentiles, int64_t *values, size_t length)
 {
     if (NULL == percentiles || NULL == values)
     {
@@ -711,8 +816,8 @@ int hdr_value_at_percentiles(const struct hdr_histogram *h, const double *percen
     for (size_t i = 0; i < length; i++)
     {
         const double requested_percentile = percentiles[i] < 100.0 ? percentiles[i] : 100.0;
-        const int64_t count_at_percentile =
-        (int64_t) (((requested_percentile / 100) * total_count) + 0.5);
+        const count_t count_at_percentile =
+        (count_t) (((requested_percentile / 100) * total_count) + 0.5);
         values[i] = count_at_percentile > 1 ? count_at_percentile : 1;
     }
 
@@ -731,7 +836,7 @@ int hdr_value_at_percentiles(const struct hdr_histogram *h, const double *percen
     return 0;
 }
 
-double hdr_mean(const struct hdr_histogram* h)
+double hdr_mean(const hdr_histogram* h)
 {
     struct hdr_iter iter;
     int64_t total = 0;
@@ -749,7 +854,7 @@ double hdr_mean(const struct hdr_histogram* h)
     return (total * 1.0) / h->total_count;
 }
 
-double hdr_stddev(const struct hdr_histogram* h)
+double hdr_stddev(const hdr_histogram* h)
 {
     double mean = hdr_mean(h);
     double geometric_dev_total = 0.0;
@@ -769,22 +874,22 @@ double hdr_stddev(const struct hdr_histogram* h)
     return sqrt(geometric_dev_total / h->total_count);
 }
 
-bool hdr_values_are_equivalent(const struct hdr_histogram* h, int64_t a, int64_t b)
+bool hdr_values_are_equivalent(const hdr_histogram* h, int64_t a, int64_t b)
 {
     return lowest_equivalent_value(h, a) == lowest_equivalent_value(h, b);
 }
 
-int64_t hdr_lowest_equivalent_value(const struct hdr_histogram* h, int64_t value)
+int64_t hdr_lowest_equivalent_value(const hdr_histogram* h, int64_t value)
 {
     return lowest_equivalent_value(h, value);
 }
 
-int64_t hdr_count_at_value(const struct hdr_histogram* h, int64_t value)
+count_t hdr_count_at_value(const hdr_histogram* h, int64_t value)
 {
     return counts_get_normalised(h, counts_index_for(h, value));
 }
 
-int64_t hdr_count_at_index(const struct hdr_histogram* h, int32_t index)
+count_t hdr_count_at_index(const hdr_histogram* h, int32_t index)
 {
     return counts_get_normalised(h, index);
 }
@@ -880,7 +985,7 @@ static bool all_values_iter_next(struct hdr_iter* iter)
     return result;
 }
 
-void hdr_iter_init(struct hdr_iter* iter, const struct hdr_histogram* h)
+void hdr_iter_init(struct hdr_iter* iter, const hdr_histogram* h)
 {
     iter->h = h;
 
@@ -955,7 +1060,7 @@ static bool percentile_iter_next(struct hdr_iter* iter)
     return true;
 }
 
-void hdr_iter_percentile_init(struct hdr_iter* iter, const struct hdr_histogram* h, int32_t ticks_per_half_distance)
+void hdr_iter_percentile_init(struct hdr_iter* iter, const hdr_histogram* h, int32_t ticks_per_half_distance)
 {
     iter->h = h;
 
@@ -969,7 +1074,7 @@ void hdr_iter_percentile_init(struct hdr_iter* iter, const struct hdr_histogram*
     iter->_next_fp = percentile_iter_next;
 }
 
-static void format_line_string(char* str, size_t len, int significant_figures, format_type format)
+static void format_line_string(char* str, size_t len, int significant_figures, hdr_format_type format)
 {
 #if defined(_MSC_VER)
 #define snprintf _snprintf
@@ -1021,7 +1126,7 @@ static bool recorded_iter_next(struct hdr_iter* iter)
     return false;
 }
 
-void hdr_iter_recorded_init(struct hdr_iter* iter, const struct hdr_histogram* h)
+void hdr_iter_recorded_init(struct hdr_iter* iter, const hdr_histogram* h)
 {
     hdr_iter_init(iter, h);
 
@@ -1076,7 +1181,7 @@ static bool iter_linear_next(struct hdr_iter* iter)
 }
 
 
-void hdr_iter_linear_init(struct hdr_iter* iter, const struct hdr_histogram* h, int64_t value_units_per_bucket)
+void hdr_iter_linear_init(struct hdr_iter* iter, const hdr_histogram* h, int64_t value_units_per_bucket)
 {
     hdr_iter_init(iter, h);
 
@@ -1133,7 +1238,7 @@ static bool log_iter_next(struct hdr_iter *iter)
 
 void hdr_iter_log_init(
         struct hdr_iter* iter,
-        const struct hdr_histogram* h,
+        const hdr_histogram* h,
         int64_t value_units_first_bucket,
         double log_base)
 {
@@ -1148,7 +1253,7 @@ void hdr_iter_log_init(
 
 /* Printing. */
 
-static const char* format_head_string(format_type format)
+static const char* format_head_string(hdr_format_type format)
 {
     switch (format)
     {
@@ -1166,8 +1271,8 @@ static const char CLASSIC_FOOTER[] =
     "#[Buckets = %12d, SubBuckets     = %12d]\n";
 
 int hdr_percentiles_print(
-        struct hdr_histogram* h, FILE* stream, int32_t ticks_per_half_distance,
-        double value_scale, format_type format)
+        hdr_histogram* h, FILE* stream, int32_t ticks_per_half_distance,
+        double value_scale, hdr_format_type format)
 {
     char line_format[25];
     const char* head_format;
