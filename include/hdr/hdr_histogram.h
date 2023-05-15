@@ -14,7 +14,6 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#define YB_USE_SHORT_COUNT_TYPE 1
 #define YB_FLEXIBLE_COUNTS_ARRAY 1
 
 #ifdef YB_USE_SHORT_COUNT_TYPE
